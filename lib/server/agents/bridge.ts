@@ -8,7 +8,8 @@ import type { AgentAdapter, CliRunState } from "./types";
 
 /** The web-driven turn of a CLI agent as the UI's RunState (no approvals: CLI print modes can't prompt). */
 export function toRunState(key: string, s: CliRunState | null, mode: PermissionMode = "default", model: string | null = null): RunState | null {
-  if (!s || (s.status !== "running" && !s.error)) return s?.status === "idle" && s.startedAt ? idleState(key, mode, model) : null;
+  /* a finished turn isn't a live session; only a running one (or one that just failed) is */
+  if (!s || (s.status !== "running" && !s.error)) return null;
   return {
     status: s.status === "running" ? "running" : s.status === "error" ? "error" : "idle",
     model,
@@ -21,16 +22,6 @@ export function toRunState(key: string, s: CliRunState | null, mode: PermissionM
   };
 }
 
-const idleState = (key: string, mode: PermissionMode, model: string | null): RunState => ({
-  status: "idle",
-  model,
-  permissionMode: mode,
-  slashCommands: [],
-  pending: [],
-  error: null,
-  costUsd: null,
-  sessionId: key,
-});
 
 export async function terminalOf(adapter: AgentAdapter, native: string): Promise<TerminalInfo | null> {
   const live = await adapter.liveProcesses?.().catch(() => null);

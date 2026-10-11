@@ -326,7 +326,7 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
             )}
             <Composer
               draftKey={id}
-              placeholder={terminal && !run ? `Type into ${where}…` : "Reply to Claude…"}
+              placeholder={terminal && !run ? `Type into ${where}…` : `Reply to ${agentName}…`}
               onSend={send}
               running={Boolean(busy && (run || terminal))}
               onStop={() => (run ? void control("interrupt") : void pressKey("Escape"))}
