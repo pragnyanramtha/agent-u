@@ -813,3 +813,399 @@ label {
     transform: none;
   }
 }
+
+/* ══════════════════════════════════════════════════════════
+ * APP SHELL: sidebar, rail, tabs, top bars
+ * ChatGPT-like restraint on top of the Beautiful UI tokens:
+ * one quiet sidebar surface, one-line rows, no section borders.
+ * ══════════════════════════════════════════════════════════ */
+
+:root {
+  --sidebar: oklch(0.972 0.002 247.84);
+  --sidebar-hover: oklch(0.94 0.003 247.86);
+  --sidebar-active: oklch(0.922 0.004 247.86);
+  --agent-codex: oklch(0.6 0.14 160);
+  --agent-opencode: oklch(0.6 0.17 254);
+  --agent-cursor: oklch(0.62 0.11 205);
+  --agent-devin: oklch(0.58 0.17 300);
+}
+.dark {
+  --sidebar: oklch(0.186 0.004 264.48);
+  --sidebar-hover: oklch(0.243 0.005 268);
+  --sidebar-active: oklch(0.275 0.006 271);
+  --agent-codex: oklch(0.74 0.14 160);
+  --agent-opencode: oklch(0.72 0.14 254);
+  --agent-cursor: oklch(0.76 0.1 205);
+  --agent-devin: oklch(0.72 0.15 300);
+}
+
+@theme inline {
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-agent-codex: var(--agent-codex);
+  --color-agent-opencode: var(--agent-opencode);
+  --color-agent-cursor: var(--agent-cursor);
+  --color-agent-devin: var(--agent-devin);
+}
+
+@layer components {
+  /* a sidebar row: 34px, one line, subtle hover, the current one a shade lighter */
+  .side-row {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 34px;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 8px;
+    padding-inline: 10px;
+    border-radius: var(--radius-control);
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 20px;
+    text-align: left;
+    transition: background-color 120ms ease;
+  }
+  .side-row:hover {
+    background: var(--sidebar-hover);
+  }
+  .side-row[aria-current="page"] {
+    background: var(--sidebar-active);
+  }
+  .side-row:focus-visible {
+    outline-offset: -2px;
+  }
+  @media (pointer: coarse) {
+    .side-row {
+      height: 40px;
+    }
+  }
+
+  /* quiet square icon button (sidebar, rail, top bars) */
+  .icon-btn {
+    position: relative;
+    display: inline-flex;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-control);
+    color: var(--ink-2);
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .icon-btn:hover,
+  .icon-btn[aria-pressed="true"],
+  .icon-btn[aria-expanded="true"] {
+    background: var(--sidebar-hover);
+    color: var(--ink);
+  }
+  .icon-btn[aria-current="page"] {
+    background: var(--sidebar-active);
+    color: var(--ink);
+  }
+  /* on the page surface (top bars) the hover is the page's own */
+  .on-page .icon-btn:hover,
+  .on-page .icon-btn[aria-pressed="true"],
+  .on-page .icon-btn[aria-expanded="true"] {
+    background: var(--hover);
+  }
+  @media (pointer: coarse) {
+    .icon-btn {
+      width: 40px;
+      height: 40px;
+    }
+  }
+
+  .menu-item {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-height: 34px;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: var(--radius-control);
+    color: var(--ink);
+    font-size: 13.5px;
+    text-align: left;
+  }
+  .menu-item:hover,
+  .menu-item:focus-visible {
+    background: var(--hover);
+    outline: none;
+  }
+  .dark .menu-item:hover,
+  .dark .menu-item:focus-visible {
+    background: var(--hover-2);
+  }
+  @media (pointer: coarse) {
+    .menu-item {
+      min-height: 40px;
+    }
+  }
+}
+
+/* Tooltips for icon buttons: pointer devices only, a beat late, never on touch. */
+@media (hover: hover) and (pointer: fine) {
+  [data-tip]::after {
+    position: absolute;
+    z-index: 60;
+    max-width: 260px;
+    overflow: hidden;
+    padding: 4px 8px;
+    border-radius: var(--radius-chip);
+    background: var(--tooltip-bg);
+    box-shadow: 0 0 0 1px var(--tooltip-border), var(--shadow-md);
+    color: var(--tooltip-fg);
+    content: attr(data-tip);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    line-height: 16px;
+    opacity: 0;
+    pointer-events: none;
+    text-overflow: ellipsis;
+    white-space: pre;
+    transition: opacity 120ms ease, transform 120ms var(--ease-out-strong);
+  }
+  [data-tip]:hover::after,
+  [data-tip]:focus-visible::after {
+    opacity: 1;
+    transition-delay: 350ms;
+  }
+  [data-tip][aria-expanded="true"]::after {
+    opacity: 0 !important;
+  }
+  [data-tip-pos="right"]::after {
+    top: 50%;
+    left: calc(100% + 8px);
+    transform: translate(-3px, -50%);
+  }
+  [data-tip-pos="right"]:hover::after,
+  [data-tip-pos="right"]:focus-visible::after {
+    transform: translate(0, -50%);
+  }
+  [data-tip-pos="bottom"]::after,
+  [data-tip-pos="bottom-end"]::after {
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translate(-50%, -3px);
+  }
+  [data-tip-pos="bottom"]:hover::after,
+  [data-tip-pos="bottom"]:focus-visible::after {
+    transform: translate(-50%, 0);
+  }
+  [data-tip-pos="bottom-end"]::after {
+    right: 0;
+    left: auto;
+    transform: translateY(-3px);
+  }
+  [data-tip-pos="bottom-end"]:hover::after,
+  [data-tip-pos="bottom-end"]:focus-visible::after {
+    transform: none;
+  }
+}
+
+/* Collapsible desktop sidebar: width glides, the two faces cross-fade.
+ * Transitions switch on after the stored state is applied, so reloads don't animate. */
+.shell-sidebar[data-anim] {
+  transition: width 260ms var(--ease-out-strong);
+}
+.shell-sidebar[data-anim] > .shell-face {
+  transition: opacity 180ms ease;
+}
+.shell-sidebar > .shell-face[data-hidden] {
+  opacity: 0;
+  pointer-events: none;
+}
+.shell-sidebar[data-anim] > .shell-face:not([data-hidden]) {
+  transition: opacity 200ms ease 60ms;
+}
+
+/* Thin scrollbars that only show while the pointer is over the list
+ * (Firefox here; Chromium/Safari get the webkit version below). */
+@supports not selector(::-webkit-scrollbar) {
+  .scroll-quiet {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 200ms ease;
+  }
+  .scroll-quiet:hover {
+    scrollbar-color: var(--line-strong) transparent;
+  }
+}
+
+/* Tabs: quiet pills on the page surface; the current one a lighter fill. */
+.tab-item {
+  color: var(--ink-3);
+}
+.tab-item:hover {
+  background: var(--hover);
+  color: var(--ink-2);
+}
+.tab-item[data-on] {
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--line), var(--shadow-xs);
+  color: var(--ink);
+}
+.dark .tab-item[data-on] {
+  background: var(--hover);
+  box-shadow: none;
+}
+
+/* ── composer pill and folder picker ───────────────────── */
+
+/* One calm surface: a soft fill, no visible border, a faint lift in light mode.
+ * Single row (lead | text | trail) until the text wraps, then stacked. */
+.composer-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "header header header"
+    "lead primary trail";
+  align-items: center;
+  column-gap: 2px;
+}
+.composer-grid[data-stacked] {
+  grid-template-areas:
+    "header header header"
+    "primary primary primary"
+    "lead . trail";
+  row-gap: 4px;
+}
+.composer-grid[data-stacked] .composer-input {
+  padding-top: 6px;
+  padding-bottom: 2px;
+}
+
+.composer-pill {
+  border-radius: 28px;
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1px oklch(0 0 0 / 0.05),
+    0 1px 2px oklch(0 0 0 / 0.03),
+    0 6px 20px -6px oklch(0 0 0 / 0.08);
+  transition:
+    box-shadow 200ms var(--ease-out-strong),
+    border-radius 200ms var(--ease-out-strong);
+}
+.composer-pill[data-stacked] {
+  border-radius: 24px;
+}
+.composer-pill:focus-within {
+  box-shadow:
+    0 0 0 1px oklch(0 0 0 / 0.09),
+    0 1px 2px oklch(0 0 0 / 0.04),
+    0 8px 28px -8px oklch(0 0 0 / 0.14);
+}
+.composer-pill[data-invalid] {
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--red) 55%, transparent),
+    0 6px 20px -6px oklch(0 0 0 / 0.08);
+}
+.dark .composer-pill {
+  background: var(--field);
+  box-shadow: 0 0 0 1px oklch(1 0 0 / 0.04), 0 8px 24px -10px oklch(0 0 0 / 0.5);
+}
+.dark .composer-pill:focus-within {
+  box-shadow: 0 0 0 1px oklch(1 0 0 / 0.09), 0 8px 24px -10px oklch(0 0 0 / 0.5);
+}
+.dark .composer-pill[data-invalid] {
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--red) 55%, transparent);
+}
+
+.composer-menu {
+  animation: pop-in 180ms var(--ease-out-strong) both;
+}
+
+/* "Starting Claude…" shimmers while the session spins up */
+.composer-busy::placeholder {
+  color: var(--ink-2);
+  animation: placeholder-pulse 1.6s ease-in-out infinite;
+}
+@keyframes placeholder-pulse {
+  50% {
+    color: var(--ink-3);
+  }
+}
+.composer-spinner {
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.folder-sheet {
+  animation: sheet-up 320ms var(--ease-out-strong) both;
+}
+@media (min-width: 640px) {
+  .folder-sheet {
+    animation: pop-in 180ms var(--ease-out-strong) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-menu,
+  .folder-sheet {
+    animation: fade-in 120ms ease-out both;
+  }
+  .composer-busy::placeholder {
+    animation: none;
+  }
+}
+
+/* Chromium and Safari draw `scrollbar-width: thin` with arrow buttons on Linux and
+ * Windows; there the webkit pseudo-elements give a slim, buttonless thumb instead.
+ * (They only apply while scrollbar-width/color are back at auto.) */
+@supports selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    background-color: var(--line-strong);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--ink-3) 55%, transparent);
+  }
+  ::-webkit-scrollbar-button,
+  ::-webkit-scrollbar-corner {
+    display: none;
+    background: transparent;
+  }
+  .scroll-quiet::-webkit-scrollbar-thumb {
+    background-color: transparent;
+  }
+  .scroll-quiet:hover::-webkit-scrollbar-thumb {
+    background-color: var(--line-strong);
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* long lists fade into the footer instead of being cut off */
+.scroll-fade {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+}
+
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}

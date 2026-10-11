@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { GitCompare, Menu, MoreHoriz, Terminal } from "iconoir-react";
+import { GitCompare, Menu, MoreHoriz, StatsReport, Terminal, Xmark } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type PermissionMode } from "@/lib/types";
-import { AgentBadge } from "./SessionList";
+import { AGENT_TONE, AgentMark } from "./SessionList";
+import { OPEN_TERMINAL_EVENT } from "./CommandPalette";
 import { api, ApiError, shortPath } from "@/lib/client/api";
 import { useSession } from "@/lib/client/useSession";
 import { terminalBusy } from "@/lib/status";
@@ -184,48 +185,65 @@ export function SessionScreen({
     [id],
   );
 
-  /* Below 380px the pill drops its label (kept for screen readers) so the title keeps its room. */
-  const pill = "flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium max-[379px]:w-7 max-[379px]:justify-center max-[379px]:px-0";
-  const pillLabel = "max-w-[9rem] truncate max-[379px]:sr-only";
+  /* status as a quiet mark + word; below 480px only the mark shows (the word stays for screen readers) */
+  const chip = "flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[13px]";
+  const chipLabel = "max-w-[9rem] truncate max-[479px]:sr-only";
   const runLabel = run ? (run.pending.length ? "Needs you" : busy ? "Working…" : "Ready") : "";
   const status = view.status === "reconnecting" ? (
-    <span role="status" className={`${pill} bg-orange-tint text-orange-ink`} title="Reconnecting…">
+    <span role="status" className={`${chip} text-orange-ink`} title="Reconnecting…">
       <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-current" aria-hidden />
-      <span className={pillLabel}>Reconnecting…</span>
+      <span className={chipLabel}>Reconnecting…</span>
     </span>
   ) : terminal ? (
-    <span className={`${pill} bg-hover text-ink-2`} title={`Open in ${where}`}>
-      <Pulse busy={terminalBusy(terminal.status)} />
-      <span className={pillLabel}>
+    <span className={`${chip} text-ink-3`} title={`Open in ${where}`}>
+      <Pulse busy={terminalBusy(terminal.status)} size={2.5} cellClass={AGENT_TONE[agent]} />
+      <span className={chipLabel}>
         <span className="sr-only">Open in </span>
-        {where}
+        {terminal.multiplexer ?? "terminal"}
       </span>
     </span>
   ) : run ? (
-    <span role="status" className={`${pill} ${run.pending.length ? "bg-orange-tint text-orange-ink" : "bg-hover text-ink-2"}`} title={runLabel}>
-      <Pulse busy={busy} cellClass={run.pending.length ? "bg-current" : "bg-ink"} />
-      <span className={pillLabel}>{runLabel}</span>
+    <span role="status" className={`${chip} ${run.pending.length ? "font-medium text-orange-ink" : "text-ink-3"}`} title={runLabel}>
+      {run.pending.length ? <span className="size-1.5 shrink-0 rounded-full bg-orange" aria-hidden /> : <Pulse busy={busy} size={2.5} cellClass={AGENT_TONE[agent]} />}
+      <span className={chipLabel}>{runLabel}</span>
     </span>
   ) : null;
+
+  const closeMenu = () => {
+    setMenuOpen(false);
+    menuButtonRef.current?.focus();
+  };
+  const openUsage = () => {
+    setChangesOpen(false);
+    setUsageOpen((v) => !v);
+  };
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1">
     <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="safe-top safe-x flex shrink-0 items-center border-b border-line">
-        <div className="flex h-14 w-full min-w-0 items-center gap-1 px-1.5 sm:gap-2 sm:px-4 lg:h-12">
-          <button type="button" onClick={onMenu} aria-label="Open sessions" aria-haspopup="dialog" data-drawer-opener className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-ink-2 hover:bg-hover hover:text-ink lg:hidden">
+      <header className="on-page safe-top safe-x relative z-20 flex shrink-0 items-center bg-page">
+        <div className="flex h-14 w-full min-w-0 items-center gap-0.5 px-1.5 sm:px-3 lg:h-[52px]">
+          <button type="button" onClick={onMenu} aria-label="Open sessions" aria-haspopup="dialog" data-drawer-opener className="icon-btn lg:hidden">
             <Menu width={19} height={19} strokeWidth={1.8} />
           </button>
-          <div className="min-w-0 flex-1 px-1">
-            <h1 className="truncate text-[14.5px] font-semibold tracking-[-0.01em] text-ink" title={view.title || undefined}>
+          <div className="flex min-w-0 flex-1 flex-col px-1.5 sm:flex-row sm:items-baseline sm:gap-2.5">
+            <h1 className="min-w-0 truncate text-[15px] font-medium tracking-[-0.01em] text-ink sm:text-[14.5px]" title={view.title || undefined}>
               {view.title || (view.status === "missing" ? "Couldn’t load this session" : "Loading session…")}
             </h1>
-            <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
-              {agent !== "claude" && <AgentBadge agent={agent} />}
-              <span className="truncate font-mono" translate="no">
-                {shortPath(view.cwd)}
-              </span>
-            </p>
+            {(view.cwd || agent !== "claude") && (
+              <p className="flex min-w-0 shrink-[3] items-center gap-1.5 text-[12px] text-ink-3 sm:text-[13px]" title={view.cwd || undefined}>
+                {agent !== "claude" && (
+                  <>
+                    <AgentMark agent={agent} />
+                    <span className="shrink-0">{agentName}</span>
+                    {view.cwd && <span aria-hidden>·</span>}
+                  </>
+                )}
+                <span className="truncate" translate="no">
+                  {shortPath(view.cwd)}
+                </span>
+              </p>
+            )}
           </div>
           {status}
           {changes.length > 0 && (
@@ -237,8 +255,9 @@ export function SessionScreen({
               }}
               aria-pressed={changesOpen}
               aria-label={`Changes: ${changes.length} ${changes.length === 1 ? "file" : "files"}`}
-              title="Changes"
-              className={`flex h-10 shrink-0 items-center gap-1 rounded-[10px] px-2 text-[12px] font-medium tabular-nums hover:bg-hover hover:text-ink ${changesOpen ? "bg-hover text-ink" : "text-ink-2"}`}
+              data-tip="Changes"
+              data-tip-pos="bottom"
+              className="icon-btn w-auto gap-1 px-2 text-[12.5px] font-medium tabular-nums"
             >
               <GitCompare width={17} height={17} strokeWidth={1.8} />
               <span className="max-[379px]:sr-only">{changes.length}</span>
@@ -250,52 +269,112 @@ export function SessionScreen({
               onClick={() => setPeek((v) => !v)}
               aria-pressed={peek}
               aria-label={peek ? "Hide terminal" : "Show terminal"}
-              title={peek ? "Hide terminal" : "Show terminal"}
-              className={`flex size-10 shrink-0 items-center justify-center rounded-[10px] hover:bg-hover hover:text-ink ${peek ? "bg-hover text-ink" : "text-ink-2"}`}
+              data-tip={peek ? "Hide terminal" : "Show terminal"}
+              data-tip-pos="bottom"
+              className="icon-btn"
             >
               <Terminal width={17} height={17} strokeWidth={1.8} />
             </button>
           )}
-          {run && (
-            <div className="relative shrink-0" data-session-menu>
-              <button
-                ref={menuButtonRef}
-                type="button"
+          <button
+            type="button"
+            onClick={openUsage}
+            aria-pressed={usageOpen}
+            aria-label="Usage and cost"
+            data-tip="Usage"
+            data-tip-pos="bottom"
+            className="icon-btn max-sm:hidden"
+          >
+            <StatsReport width={17} height={17} strokeWidth={1.8} />
+          </button>
+          <div className="relative shrink-0" data-session-menu>
+            <button
+              ref={menuButtonRef}
+              type="button"
+              aria-label="Session options"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              data-tip="Options"
+              data-tip-pos="bottom-end"
+              onClick={() => setMenuOpen((v) => !v)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown" && !menuOpen) {
+                  e.preventDefault();
+                  setMenuOpen(true);
+                }
+              }}
+              className="icon-btn"
+            >
+              <MoreHoriz width={18} height={18} strokeWidth={1.8} />
+            </button>
+            {menuOpen && (
+              <div
+                ref={menuRef}
+                role="menu"
                 aria-label="Session options"
-                aria-haspopup="menu"
-                aria-expanded={menuOpen}
-                onClick={() => setMenuOpen((v) => !v)}
                 onKeyDown={(e) => {
-                  if (e.key === "ArrowDown" && !menuOpen) {
-                    e.preventDefault();
-                    setMenuOpen(true);
-                  }
+                  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+                  e.preventDefault();
+                  const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+                  const i = items.indexOf(document.activeElement as HTMLElement);
+                  items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
                 }}
-                className={`flex size-10 items-center justify-center rounded-[10px] hover:bg-hover hover:text-ink ${menuOpen ? "bg-hover text-ink" : "text-ink-2"}`}
+                className="absolute top-full right-0 z-30 mt-1 w-64 max-w-[calc(100vw-1rem)] rounded-[12px] bg-surface p-1 shadow-overlay"
+                style={{ animation: "pop-in 160ms cubic-bezier(0.23,1,0.32,1) both", transformOrigin: "top right" }}
               >
-                <MoreHoriz width={18} height={18} strokeWidth={1.8} />
-              </button>
-              {menuOpen && (
-                <div ref={menuRef} role="menu" aria-label="Session options" className="absolute top-full right-0 z-30 mt-1 w-60 max-w-[calc(100vw-1rem)] rounded-[12px] bg-surface p-1 shadow-overlay" style={{ animation: "pop-in 160ms cubic-bezier(0.23,1,0.32,1) both", transformOrigin: "top right" }}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu();
+                    setChangesOpen(false);
+                    setUsageOpen(true);
+                  }}
+                  className="menu-item"
+                >
+                  <StatsReport width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
+                  Usage and cost
+                </button>
+                {view.cwd && (
                   <button
                     type="button"
                     role="menuitem"
                     onClick={() => {
                       setMenuOpen(false);
-                      menuButtonRef.current?.focus();
-                      void control("stop");
+                      window.dispatchEvent(new CustomEvent(OPEN_TERMINAL_EVENT, { detail: { cwd: view.cwd, label: `shell in ${shortPath(view.cwd)}` } }));
                     }}
-                    className="flex w-full flex-col items-start rounded-[8px] px-2.5 py-2 text-left hover:bg-hover focus-visible:bg-hover focus-visible:outline-offset-[-2px]"
+                    className="menu-item"
                   >
-                    <span className="text-[13px] font-medium text-ink">End web session</span>
-                    <span className="text-[12px] text-ink-3">Stops the claude process. History stays.</span>
+                    <Terminal width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
+                    Open a terminal here
                   </button>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+                {run && (
+                  <>
+                    <div className="mx-2 my-1 h-px bg-line" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        closeMenu();
+                        void control("stop");
+                      }}
+                      className="menu-item items-start"
+                    >
+                      <Xmark width={15} height={15} strokeWidth={1.8} className="mt-0.5 shrink-0 text-ink-3" aria-hidden />
+                      <span className="flex min-w-0 flex-col">
+                        <span>End web session</span>
+                        <span className="text-[12px] text-ink-3">Stops the {agent === "claude" ? "claude" : agentName} process. History stays.</span>
+                      </span>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           {extra}
         </div>
+        <div className="pointer-events-none absolute inset-x-0 top-full h-3 bg-gradient-to-b from-page to-transparent" aria-hidden />
       </header>
       {peek && terminal && !run && <TerminalPeek id={id} pid={terminal.pid} where={where ?? "terminal"} onClose={() => setPeek(false)} />}
 

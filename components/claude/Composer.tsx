@@ -1,16 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, NavArrowDown } from "iconoir-react";
-import GlideMenu from "@/components/primitives/GlideMenu";
+import { ArrowUp, Check, Folder, NavArrowDown, Plus, ShieldAlert, ShieldCheck } from "iconoir-react";
 import { APP_COMMANDS, rankCommands, type SlashItem } from "@/lib/commands";
 import { ContextRing, type ContextUsage } from "./ContextRing";
 import type { SessionCost } from "@/lib/client/usage";
-import type { PermissionMode } from "@/lib/types";
+import { shortPath } from "@/lib/client/api";
+import { AGENT_LABEL, type AgentId, type PermissionMode } from "@/lib/types";
 
-/* The composer from Beautiful UI's PromptBar (tall variant), wired for Claude:
- * slash commands from the live session, a permission-mode picker, a model
- * picker, and send / stop. */
+/* The composer pill: one calm surface with a "+" menu on the left, the text
+ * in the middle, and one quiet agent/model/approvals picker plus send on the
+ * right. Single row while the text fits on one line (and the pill is wide),
+ * stacked once it grows. */
 
 export const MODES: { key: PermissionMode; name: string; short: string; desc: string }[] = [
   { key: "default", name: "Ask before acting", short: "Ask first", desc: "Approve edits and commands here" },
@@ -18,6 +19,9 @@ export const MODES: { key: PermissionMode; name: string; short: string; desc: st
   { key: "plan", name: "Plan only", short: "Plan", desc: "Read and propose, no changes" },
   { key: "bypassPermissions", name: "Bypass approvals", short: "Bypass", desc: "Everything runs without asking" },
 ];
+
+/* the labels in the segmented approvals control */
+const MODE_SEG: Record<PermissionMode, string> = { default: "Ask", acceptEdits: "Edits", plan: "Plan", bypassPermissions: "Bypass" };
 
 export const MODELS = [
   { key: "", name: "Default" },
@@ -34,27 +38,48 @@ export function modelLabel(model: string | null) {
   return MODELS.find((x) => x.key === model)?.name ?? model;
 }
 
-type Menu = "slash" | "mode" | "model" | null;
+export type AgentOption = { id: AgentId; label: string; installed: boolean };
+
+type Menu = "slash" | "pick" | "plus" | null;
 
 const KIND_LABEL: Record<SlashItem["kind"], string> = { app: "This app", builtin: "Claude Code", command: "Your commands", skill: "Skills" };
 
-const MENU_W = { mode: 256, model: 224 };
+const MENU_W = { pick: 272, plus: 232 };
 
-function MenuShell({ children, left, width }: { children: React.ReactNode; left?: number; width?: number }) {
+function MenuShell({
+  children,
+  placement,
+  maxHeight,
+  left,
+  right,
+  width,
+}: {
+  children: React.ReactNode;
+  placement: "up" | "down";
+  maxHeight: number;
+  left?: number;
+  right?: number;
+  width?: number;
+}) {
   const full = width === undefined;
+  const origin = `${placement === "up" ? "bottom" : "top"} ${right !== undefined ? "right" : "left"}`;
   return (
     <div
-      className={`no-scrollbar absolute bottom-full z-20 mb-2 max-h-[min(26rem,52dvh)] overflow-y-auto overscroll-contain rounded-[12px] bg-surface p-1 shadow-raised ${full ? "inset-x-0" : "max-w-full"}`}
-      style={{ left: full ? undefined : left ?? 0, width, animation: "pop-in 180ms cubic-bezier(0.23,1,0.32,1) both", transformOrigin: "bottom left" }}
+      className={`composer-menu no-scrollbar absolute z-30 overflow-y-auto overscroll-contain rounded-[10px] bg-surface p-1 shadow-raised ${
+        placement === "up" ? "bottom-full mb-2" : "top-full mt-2"
+      } ${full ? "inset-x-0" : "max-w-full"}`}
+      style={{ left: full || right !== undefined ? undefined : left ?? 0, right, width, maxHeight, transformOrigin: origin }}
     >
       {children}
     </div>
   );
 }
 
+const ITEM_SELECTOR = '[role="menuitemradio"]:not([disabled]), [role="menuitem"]:not([disabled])';
+
 /** Arrow keys, Home and End move focus between a menu's items. */
 function moveFocus(e: React.KeyboardEvent<HTMLElement>) {
-  const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
+  const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(ITEM_SELECTOR));
   if (!items.length) return;
   const at = items.indexOf(document.activeElement as HTMLElement);
   const next =
@@ -64,7 +89,18 @@ function moveFocus(e: React.KeyboardEvent<HTMLElement>) {
   items[next].focus();
 }
 
-const chip = "tap relative flex h-9 items-center gap-1 rounded-full px-2.5 text-[12.5px] font-medium transition-colors duration-150 sm:h-7 sm:text-[12px]";
+function MenuLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p role="presentation" className="px-2.5 pt-2 pb-1 text-[11.5px] font-medium text-ink-3">
+      {children}
+    </p>
+  );
+}
+
+const menuRow =
+  "flex w-full min-w-0 items-center gap-2.5 rounded-[8px] px-2.5 text-left text-[13.5px] text-ink transition-colors duration-75 outline-none hover:bg-hover focus-visible:bg-hover disabled:cursor-default disabled:hover:bg-transparent h-10 sm:h-8 sm:text-[13px]";
+
+const ghost = "tap relative flex shrink-0 items-center justify-center rounded-full text-ink-2 transition-[background-color,color] duration-150 hover:bg-hover hover:text-ink";
 
 export function Composer({
   draftKey,
@@ -86,6 +122,13 @@ export function Composer({
   models = MODELS,
   suggestion = null,
   cost = null,
+  agents,
+  agent = "claude",
+  onAgentChange,
+  folder,
+  onPickFolder,
+  folderInvalid = false,
+  busyLabel,
 }: {
   draftKey: string;
   placeholder: string;
@@ -106,23 +149,38 @@ export function Composer({
   /** latest turn's token usage, shown as the context ring */
   usage?: ContextUsage | null;
   costUsd?: number | null;
-  /** model choices for this agent (Claude's by default) */
+  /** model choices for this agent (Claude's by default); ignored when `agents` is set */
   models?: { key: string; name: string }[];
   /** Claude's suggested next message; Tab or a tap puts it in the box */
   suggestion?: string | null;
   /** session cost (actual or estimated) for the context popover */
   cost?: SessionCost | null;
+  /** agents to choose from (new sessions); without it the agent is fixed and the picker only shows models */
+  agents?: AgentOption[];
+  agent?: AgentId;
+  onAgentChange?: (agent: AgentId) => void;
+  /** working folder chip (new sessions); undefined hides it, "" shows an empty chip */
+  folder?: string;
+  /** opens the folder picker; adds "Folder" to the + menu */
+  onPickFolder?: () => void;
+  folderInvalid?: boolean;
+  /** shown in the box while onSend is pending (e.g. "Starting Claude…") */
+  busyLabel?: string;
 }) {
   const [draft, setDraft] = useState("");
   const [menu, setMenu] = useState<Menu>(null);
   const [slashHidden, setSlashHidden] = useState(false);
-  const [menuLeft, setMenuLeft] = useState(0);
+  const [menuPos, setMenuPos] = useState<{ left?: number; right?: number }>({});
+  const [placement, setPlacement] = useState<"up" | "down">("up");
+  const [menuMax, setMenuMax] = useState(416);
   const [active, setActive] = useState(0);
   const [sending, setSending] = useState(false);
+  const [wide, setWide] = useState(true);
+  const [multi, setMulti] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const modeRef = useRef<HTMLButtonElement>(null);
-  const modelRef = useRef<HTMLButtonElement>(null);
+  const pickRef = useRef<HTMLButtonElement>(null);
+  const plusRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const uid = useId();
   const [catalog, setCatalog] = useState<SlashItem[]>([]);
@@ -152,13 +210,28 @@ export function Composer({
     if (autoFocus && window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus();
   }, [autoFocus, draftKey]);
 
+  /* one row only when there's room for it */
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setWide(el.offsetWidth >= 520));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const stacked = !wide || multi;
+
   useLayoutEffect(() => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = "0px";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, 44), 200)}px`;
-    el.style.overflowY = el.scrollHeight > 200 ? "auto" : "hidden";
-  }, [draft]);
+    const h = el.scrollHeight;
+    el.style.height = `${Math.min(Math.max(h, 36), 200)}px`;
+    el.style.overflowY = h > 200 ? "auto" : "hidden";
+    /* grow into the stacked layout once the text wraps; go back only when the box is cleared */
+    if (!draft) setMulti(false);
+    else if (!stacked && (h > 44 || draft.includes("\n"))) setMulti(true);
+  }, [draft, stacked]);
 
   const slashQuery = /^\/([\w:-]*)$/.exec(draft)?.[1];
   const allCommands = useMemo(() => {
@@ -166,15 +239,28 @@ export function Composer({
     const live = slashCommands.filter((n) => !known.has(n)).map((name): SlashItem => ({ name, description: "", kind: "command" }));
     return [...(onAppCommand ? APP_COMMANDS : []), ...catalog, ...live];
   }, [catalog, slashCommands, onAppCommand]);
-  const commands = slashQuery === undefined ? [] : rankCommands(allCommands, slashQuery);
+  /* "Commands" in the + menu opens the list without touching the text; picking one prefixes it */
+  const forcedSlash = menu === "slash";
+  const commands = slashQuery !== undefined ? rankCommands(allCommands, slashQuery) : forcedSlash ? rankCommands(allCommands, "") : [];
   const openMenu: Menu = menu ?? (slashQuery !== undefined && !slashHidden ? "slash" : null);
 
-  useEffect(() => setActive(0), [slashQuery]);
+  useEffect(() => setActive(0), [slashQuery, forcedSlash]);
+
+  /* menus open toward the side of the screen with more room */
+  useLayoutEffect(() => {
+    if (!openMenu) return;
+    const r = rootRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const up = r.top > window.innerHeight - r.bottom;
+    setPlacement(up ? "up" : "down");
+    /* use the room there is (minus a margin), capped so long lists still scroll */
+    setMenuMax(Math.max(160, Math.min(520, (up ? r.top : window.innerHeight - r.bottom) - 16)));
+  }, [openMenu]);
 
   /* close on Escape, outside taps, or focus leaving the composer; return focus to the trigger */
   const closeMenu = useCallback(
     (refocus: boolean) => {
-      const trigger = menu === "mode" ? modeRef.current : menu === "model" ? modelRef.current : inputRef.current;
+      const trigger = menu === "pick" ? pickRef.current : menu === "plus" ? plusRef.current : inputRef.current;
       setMenu(null);
       setSlashHidden(true);
       if (refocus) trigger?.focus();
@@ -205,18 +291,26 @@ export function Composer({
     };
   }, [openMenu, closeMenu]);
 
-  /* mode and model menus take focus on the checked item so arrows work right away */
+  /* the picker takes focus on the checked item (the + menu on its first) so arrows work right away */
   useEffect(() => {
-    if (menu !== "mode" && menu !== "model") return;
-    const el = menuRef.current?.querySelector<HTMLElement>('[aria-checked="true"]') ?? menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"]');
+    if (menu !== "pick" && menu !== "plus") return;
+    const root = menuRef.current;
+    const el = (menu === "pick" ? root?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]') : null) ?? root?.querySelector<HTMLElement>(ITEM_SELECTOR);
     el?.focus({ preventScroll: true });
   }, [menu]);
 
-  const toggleMenu = (which: "mode" | "model") => {
+  const toggleMenu = (which: "pick" | "plus") => {
     if (menu === which) return closeMenu(false);
     const root = rootRef.current?.getBoundingClientRect();
-    const trigger = (which === "mode" ? modeRef.current : modelRef.current)?.getBoundingClientRect();
-    if (root && trigger) setMenuLeft(Math.max(0, Math.min(trigger.left - root.left - 4, root.width - MENU_W[which])));
+    const trigger = (which === "pick" ? pickRef.current : plusRef.current)?.getBoundingClientRect();
+    if (root && trigger) {
+      const w = Math.min(MENU_W[which], root.width);
+      setMenuPos(
+        which === "pick"
+          ? { right: Math.max(0, Math.min(root.right - trigger.right - 4, root.width - w)) }
+          : { left: Math.max(0, Math.min(trigger.left - root.left - 4, root.width - w)) },
+      );
+    }
     setMenu(which);
   };
 
@@ -237,24 +331,47 @@ export function Composer({
   };
 
   const pickCommand = (c: string) => {
-    setDraft(`/${c} `);
+    setDraft((d) => (slashQuery !== undefined || !d.trim() ? `/${c} ` : `/${c} ${d}`));
     setMenu(null);
+    setSlashHidden(true);
     inputRef.current?.focus();
   };
 
   const currentMode = MODES.find((m) => m.key === mode) ?? MODES[0];
   const slashOpen = openMenu === "slash";
+  /* with `agents` (even while it loads) the agent is choosable; the Claude section is always there */
+  const pickable = agents && onAgentChange;
+  const agentLabel = agents?.find((a) => a.id === agent)?.label ?? AGENT_LABEL[agent];
+  /* new sessions name the agent ("Claude · Opus", "Codex"); replies only the model */
+  const pickLabel = pickable ? (agent === "claude" && model ? `${agentLabel} · ${modelLabel(model)}` : agentLabel) : modelLabel(model);
+  const modelOn = (key: string, list: { key: string }[]) => key === (model && list.some((x) => x.key === model) ? model : "");
+  const busy = sending && busyLabel;
+
+  const modelRow = (m: { key: string; name: string }, list: { key: string }[], on: boolean, onPick: () => void) => (
+    <button
+      key={m.key || "default"}
+      type="button"
+      role="menuitemradio"
+      aria-checked={on}
+      onClick={onPick}
+      className={menuRow}
+    >
+      <span className="min-w-0 truncate">{m.name}</span>
+      {m.key === "" && model && !list.some((x) => x.key === model) && <span className="truncate text-[12px] text-ink-3">{modelLabel(model)}</span>}
+      {on && <Check width={15} height={15} strokeWidth={2.2} className="ml-auto shrink-0 text-ink" aria-hidden />}
+    </button>
+  );
 
   return (
     <div ref={rootRef} className="relative w-full" data-composer>
       {slashOpen && (
-        <MenuShell>
+        <MenuShell placement={placement} maxHeight={Math.min(menuMax, 416)}>
           <div role="listbox" id={`${uid}-slash`} aria-label="Slash commands">
             {commands.map((c, i) => {
               const header = i === 0 || commands[i - 1].kind !== c.kind ? KIND_LABEL[c.kind] : null;
               return (
                 <div key={`${c.kind}:${c.name}`}>
-                  {header && !slashQuery && <p className="px-2.5 pt-2 pb-1 text-[11px] font-medium text-ink-3">{header}</p>}
+                  {header && !slashQuery && <p className="px-2.5 pt-2 pb-1 text-[11.5px] font-medium text-ink-3">{header}</p>}
                   <button
                     id={`${uid}-cmd-${i}`}
                     type="button"
@@ -286,89 +403,200 @@ export function Composer({
         </MenuShell>
       )}
 
-      {openMenu === "mode" && (
-        <MenuShell left={menuLeft} width={MENU_W.mode}>
-          <div ref={menuRef} role="menu" id={`${uid}-mode`} aria-label="Permission mode" onKeyDown={moveFocus}>
-            <GlideMenu className="flex flex-col" highlightClassName="inset-x-0 rounded-[8px] bg-hover">
-              {MODES.map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={m.key === mode}
-                  data-menu-row
-                  onClick={() => {
-                    onModeChange(m.key);
-                    closeMenu(true);
-                  }}
-                  className="relative z-10 flex w-full items-start gap-2 rounded-[8px] px-2.5 py-2 text-left focus-visible:outline-offset-[-2px]"
-                >
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className={`text-[13px] font-medium ${m.key === mode ? "text-accent-ink" : "text-ink"}`}>{m.name}</span>
-                    <span className="text-[12px] text-ink-3">{m.desc}</span>
+      {openMenu === "plus" && (
+        <MenuShell placement={placement} maxHeight={menuMax} left={menuPos.left} width={MENU_W.plus}>
+          <div ref={menuRef} role="menu" id={`${uid}-plus`} aria-label="Add" onKeyDown={moveFocus}>
+            {onPickFolder && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  onPickFolder();
+                }}
+                className={menuRow}
+              >
+                <Folder width={16} height={16} strokeWidth={1.8} className="shrink-0 text-ink-2" aria-hidden />
+                <span className="shrink-0">Folder</span>
+                {folder && (
+                  <span className="ml-auto min-w-0 truncate text-[12px] text-ink-3" translate="no">
+                    {shortPath(folder)}
                   </span>
-                  {m.key === mode && <Check width={15} height={15} strokeWidth={2.2} className="mt-0.5 shrink-0 text-accent-ink" aria-hidden />}
-                </button>
-              ))}
-            </GlideMenu>
+                )}
+              </button>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setSlashHidden(false);
+                if (!draft.trim()) {
+                  setMenu(null);
+                  setDraft("/");
+                } else setMenu("slash");
+                inputRef.current?.focus();
+              }}
+              className={menuRow}
+            >
+              <span aria-hidden className="flex size-4 shrink-0 items-center justify-center font-mono text-[14px] leading-none text-ink-2">
+                /
+              </span>
+              <span>Commands</span>
+              <span className="ml-auto text-[12px] text-ink-3">Type /</span>
+            </button>
           </div>
         </MenuShell>
       )}
 
-      {openMenu === "model" && (
-        <MenuShell left={menuLeft} width={MENU_W.model}>
-          <div ref={menuRef} role="menu" id={`${uid}-model`} aria-label="Model" onKeyDown={moveFocus}>
-            <GlideMenu className="flex flex-col" highlightClassName="inset-x-0 rounded-[8px] bg-hover">
-              {models.map((m) => {
-                const on = m.key === (model && models.some((x) => x.key === model) ? model : "");
-                return (
-                  <button
-                    key={m.key || "default"}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={on}
-                    data-menu-row
-                    onClick={() => {
+      {openMenu === "pick" && (
+        <MenuShell placement={placement} maxHeight={menuMax} right={menuPos.right} width={MENU_W.pick}>
+          <div ref={menuRef} role="menu" id={`${uid}-pick`} aria-label={pickable ? "Agent, model and approvals" : "Model and approvals"} onKeyDown={moveFocus}>
+            {pickable ? (
+              <>
+                <div role="group" aria-label="Claude">
+                  <MenuLabel>Claude</MenuLabel>
+                  {MODELS.map((m) =>
+                    modelRow(m, MODELS, agent === "claude" && modelOn(m.key, MODELS), () => {
+                      if (agent !== "claude") onAgentChange("claude");
                       onModelChange(m.key);
                       closeMenu(true);
-                    }}
-                    className="relative z-10 flex h-10 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-[13px] font-medium text-ink focus-visible:outline-offset-[-2px] sm:h-8"
-                  >
-                    <span className={on ? "text-accent-ink" : ""}>{m.name}</span>
-                    {m.key === "" && model && !models.some((x) => x.key === model) && <span className="truncate text-[12px] font-normal text-ink-3">{modelLabel(model)}</span>}
-                    {on && <Check width={15} height={15} strokeWidth={2.2} className="ml-auto shrink-0 text-accent-ink" aria-hidden />}
-                  </button>
-                );
-              })}
-            </GlideMenu>
+                    }),
+                  )}
+                </div>
+                {agents.some((a) => a.id !== "claude") && (
+                  <div role="group" aria-label="Other agents">
+                    <MenuLabel>Other agents</MenuLabel>
+                    {agents
+                      .filter((a) => a.id !== "claude")
+                      .map((a) => (
+                        <button
+                          key={a.id}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={agent === a.id}
+                          disabled={!a.installed}
+                          title={a.installed ? undefined : `${a.label} isn't installed on the server`}
+                          onClick={() => {
+                            onAgentChange(a.id);
+                            closeMenu(true);
+                          }}
+                          className={menuRow}
+                        >
+                          <span className={a.installed ? "" : "text-ink-3"}>{a.label}</span>
+                          {!a.installed && <span className="ml-auto text-[12px] text-ink-3">Not installed</span>}
+                          {agent === a.id && <Check width={15} height={15} strokeWidth={2.2} className="ml-auto shrink-0 text-ink" aria-hidden />}
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div role="group" aria-label="Model">
+                <MenuLabel>Model</MenuLabel>
+                {models.map((m) =>
+                  modelRow(m, models, modelOn(m.key, models), () => {
+                    onModelChange(m.key);
+                    closeMenu(true);
+                  }),
+                )}
+              </div>
+            )}
+            <div role="separator" className="mx-2.5 my-1 h-px bg-line" />
+            <div role="group" aria-label="Approvals" className="px-1.5 pb-1.5">
+              <p role="presentation" className="px-1 pt-1.5 pb-1.5 text-[11.5px] font-medium text-ink-3">
+                Approvals
+              </p>
+              <div className="grid grid-cols-4 gap-0.5 rounded-[8px] bg-inset p-0.5 shadow-hairline">
+                {MODES.map((m) => {
+                  const on = m.key === mode;
+                  return (
+                    <button
+                      key={m.key}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={on}
+                      aria-label={m.name}
+                      title={m.desc}
+                      onClick={() => onModeChange(m.key)}
+                      className={`h-9 rounded-[6px] text-[12.5px] font-medium outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-7 sm:text-[12px] ${
+                        on ? `bg-surface shadow-btn ${m.key === "bypassPermissions" ? "text-orange-ink" : "text-ink"}` : "text-ink-3 hover:text-ink-2"
+                      }`}
+                    >
+                      {MODE_SEG[m.key]}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="px-1 pt-1.5 text-[12px] leading-4 text-ink-3">{currentMode.desc}</p>
+            </div>
           </div>
         </MenuShell>
       )}
 
-      <div className="relative flex flex-col gap-1 rounded-[22px] border border-line bg-surface p-2.5 shadow-card transition-[border-color] duration-150 focus-within:border-line-strong sm:p-3">
-        {notice}
-        {suggestion && !draft && (
-          <button
-            type="button"
-            onClick={() => {
-              setDraft(suggestion);
-              inputRef.current?.focus();
-            }}
-            className="flex w-full min-w-0 items-center gap-2 rounded-[12px] px-1.5 pt-0.5 text-left text-[12.5px] text-ink-3 hover:text-ink-2"
-            title="Use this suggestion (Tab)"
-          >
-            <span className="shrink-0 rounded-[5px] bg-inset px-1.5 py-px font-mono text-[10.5px] shadow-hairline">Tab</span>
-            <span className="min-w-0 truncate">{suggestion}</span>
-          </button>
+      <div className="composer-pill composer-grid relative px-2.5 py-2.5" data-stacked={stacked || undefined} data-invalid={folderInvalid || undefined}>
+        {(notice || (suggestion && !draft)) && (
+          <div className="flex min-w-0 flex-col gap-1 px-1 pb-1 [grid-area:header]">
+            {notice}
+            {suggestion && !draft && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft(suggestion);
+                  inputRef.current?.focus();
+                }}
+                className="flex w-full min-w-0 items-center gap-2 rounded-[12px] px-1 pt-0.5 text-left text-[12.5px] text-ink-3 hover:text-ink-2"
+                title="Use this suggestion (Tab)"
+              >
+                <span className="shrink-0 rounded-[5px] bg-inset px-1.5 py-px font-mono text-[10.5px] shadow-hairline">Tab</span>
+                <span className="min-w-0 truncate">{suggestion}</span>
+              </button>
+            )}
+          </div>
         )}
+
+        <div className="flex min-w-0 items-center gap-0.5 [grid-area:lead]">
+          <button
+            ref={plusRef}
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={openMenu === "plus"}
+            aria-controls={openMenu === "plus" ? `${uid}-plus` : undefined}
+            aria-label="Add folder or command"
+            title="Add"
+            onClick={() => toggleMenu("plus")}
+            className={`${ghost} size-9 ${openMenu === "plus" ? "bg-hover text-ink" : ""}`}
+          >
+            <Plus width={20} height={20} strokeWidth={1.7} />
+          </button>
+          {folder !== undefined && (
+            <button
+              type="button"
+              onClick={onPickFolder}
+              title={folder || "Choose a folder"}
+              aria-label={folder ? `Folder: ${folder}. Change folder` : "Choose a folder"}
+              aria-haspopup="dialog"
+              aria-invalid={folderInvalid || undefined}
+              className={`tap relative flex h-9 min-w-0 max-w-[11rem] items-center gap-1.5 rounded-full px-2.5 text-[13px] transition-[background-color,color] duration-150 sm:max-w-[13rem] ${
+                folderInvalid ? "bg-red-tint text-red-ink" : folder ? "text-ink-2 hover:bg-hover hover:text-ink" : "text-ink-3 hover:bg-hover hover:text-ink-2"
+              }`}
+            >
+              <Folder width={15} height={15} strokeWidth={1.8} className="shrink-0" aria-hidden />
+              <span className="min-w-0 truncate" translate="no">
+                {folder ? folder.replace(/\/+$/, "").split("/").pop() || "/" : "Folder"}
+              </span>
+            </button>
+          )}
+        </div>
+
         <textarea
           ref={inputRef}
           rows={1}
           value={draft}
+          readOnly={Boolean(busy)}
           onChange={(e) => {
             setDraft(e.target.value);
             setSlashHidden(false);
-            if (menu === "mode" || menu === "model") setMenu(null);
+            if (menu) setMenu(null);
           }}
           onKeyDown={(e) => {
             if (slashOpen && commands.length) {
@@ -377,7 +605,7 @@ export function Composer({
                 setActive((a) => (a + (e.key === "ArrowDown" ? 1 : commands.length - 1)) % commands.length);
                 return;
               }
-              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !draft.includes(" "))) {
+              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && (forcedSlash || !draft.includes(" ")))) {
                 e.preventDefault();
                 pickCommand(commands[active].name);
                 return;
@@ -394,87 +622,60 @@ export function Composer({
               void send();
             }
           }}
-          placeholder={placeholder}
-          aria-label="Message Claude"
+          placeholder={busy ? busyLabel : placeholder}
+          aria-label="Message"
+          aria-busy={Boolean(busy) || undefined}
           aria-controls={slashOpen ? `${uid}-slash` : undefined}
           aria-activedescendant={slashOpen && commands.length ? `${uid}-cmd-${active}` : undefined}
           aria-autocomplete="list"
           enterKeyHint="send"
-          className="w-full resize-none bg-transparent px-1.5 py-2 text-[16px] leading-6 text-ink outline-none [overflow-wrap:anywhere] placeholder:text-ink-3 sm:text-[14px] sm:pointer-coarse:text-[16px] sm:leading-5 sm:pointer-coarse:leading-6"
+          className={`composer-input w-full min-w-0 resize-none bg-transparent px-2 py-1.5 text-[16px] leading-6 text-ink outline-none [grid-area:primary] [overflow-wrap:anywhere] sm:text-[15px] sm:pointer-coarse:text-[16px] ${
+            busy ? "placeholder:text-ink-2 composer-busy" : "placeholder:text-ink-3"
+          }`}
         />
-        <div className="flex min-w-0 items-center gap-1">
+
+        <div className="flex min-w-0 items-center justify-end gap-1 [grid-area:trail]">
           <button
-            ref={modeRef}
+            ref={pickRef}
             type="button"
             aria-haspopup="menu"
-            aria-expanded={openMenu === "mode"}
-            aria-controls={openMenu === "mode" ? `${uid}-mode` : undefined}
-            aria-label={`Permission mode: ${currentMode.name}`}
-            onClick={() => toggleMenu("mode")}
+            aria-expanded={openMenu === "pick"}
+            aria-controls={openMenu === "pick" ? `${uid}-pick` : undefined}
+            aria-label={`${pickable ? `Agent: ${agentLabel}, model` : "Model"}: ${modelLabel(model)}. Approvals: ${currentMode.name}`}
+            title={`Approvals: ${currentMode.name}`}
+            onClick={() => toggleMenu("pick")}
             onKeyDown={(e) => {
-              if ((e.key === "ArrowUp" || e.key === "ArrowDown") && menu !== "mode") {
+              if ((e.key === "ArrowUp" || e.key === "ArrowDown") && menu !== "pick") {
                 e.preventDefault();
-                toggleMenu("mode");
+                toggleMenu("pick");
               }
             }}
-            className={`${chip} shrink-0 ${
-              mode === "bypassPermissions"
-                ? "bg-orange-tint text-orange-ink"
-                : mode === "plan"
-                  ? "bg-accent-tint text-accent-ink"
-                  : openMenu === "mode"
-                    ? "bg-hover text-ink"
-                    : "text-ink-2 hover:bg-hover hover:text-ink"
+            className={`tap relative flex h-9 min-w-0 items-center gap-1 rounded-full pr-2 pl-2.5 text-[13px] transition-[background-color,color] duration-150 ${
+              openMenu === "pick" ? "bg-hover text-ink" : "text-ink-2 hover:bg-hover hover:text-ink"
             }`}
           >
-            <span className="whitespace-nowrap">{currentMode.short}</span>
-            <NavArrowDown width={11} height={11} strokeWidth={2.4} className="shrink-0" />
+            {mode === "bypassPermissions" && <ShieldAlert width={14} height={14} strokeWidth={1.9} className="shrink-0 text-orange-ink" aria-hidden />}
+            {mode === "acceptEdits" && <ShieldCheck width={14} height={14} strokeWidth={1.9} className="shrink-0 text-ink-3" aria-hidden />}
+            {mode === "plan" && <span className="shrink-0 rounded-[5px] bg-accent-tint px-1.5 py-px text-[11px] font-medium text-accent-ink">Plan</span>}
+            <span className="min-w-0 truncate whitespace-nowrap">{pickLabel}</span>
+            <NavArrowDown width={12} height={12} strokeWidth={2.2} className={`shrink-0 text-ink-3 transition-transform duration-200 ${openMenu === "pick" ? "rotate-180" : ""}`} aria-hidden />
           </button>
-          <button
-            ref={modelRef}
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={openMenu === "model"}
-            aria-controls={openMenu === "model" ? `${uid}-model` : undefined}
-            aria-label={`Model: ${modelLabel(model)}`}
-            onClick={() => toggleMenu("model")}
-            onKeyDown={(e) => {
-              if ((e.key === "ArrowUp" || e.key === "ArrowDown") && menu !== "model") {
-                e.preventDefault();
-                toggleMenu("model");
-              }
-            }}
-            className={`${chip} min-w-0 ${openMenu === "model" ? "bg-hover text-ink" : "text-ink-2 hover:bg-hover hover:text-ink"}`}
-          >
-            <span className="truncate">{modelLabel(model)}</span>
-            <NavArrowDown width={11} height={11} strokeWidth={2.4} className="shrink-0" />
-          </button>
-
-          <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
-            <ContextRing usage={usage} costUsd={costUsd} cost={cost} />
-            {running && onStop && (
-              <button
-                type="button"
-                onClick={onStop}
-                aria-label="Stop Claude"
-                title="Stop"
-                className="tap relative flex size-9 items-center justify-center rounded-[10px] text-ink-2 shadow-btn transition-[background-color,transform] duration-150 hover:bg-hover active:scale-[0.94] sm:size-8"
-              >
-                <span className="size-2.5 rounded-[2px] bg-current" />
-              </button>
-            )}
-            <button
-              type="button"
-              aria-label={sending ? "Sending…" : "Send (Ctrl+Enter)"}
-              title="Send (Ctrl+Enter)"
-              disabled={!canSend}
-              onClick={() => void send()}
-              className="tap relative flex size-9 items-center justify-center rounded-[10px] transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.94] sm:size-8"
-              style={{ background: canSend ? "var(--ink)" : "var(--line-strong)", color: canSend ? "var(--surface)" : "var(--ink-2)" }}
-            >
-              <ArrowUp width={17} height={17} strokeWidth={2.2} />
+          <ContextRing usage={usage} costUsd={costUsd} cost={cost} />
+          {running && onStop && (
+            <button type="button" onClick={onStop} aria-label="Stop" title="Stop" className={`${ghost} size-9 shadow-btn active:scale-[0.94]`}>
+              <span className="size-2.5 rounded-[2px] bg-current" />
             </button>
-          </div>
+          )}
+          <button
+            type="button"
+            aria-label={sending ? "Sending…" : "Send (Ctrl+Enter)"}
+            title="Send (Ctrl+Enter)"
+            disabled={!canSend}
+            onClick={() => void send()}
+            className="composer-send tap relative flex size-9 shrink-0 items-center justify-center rounded-full bg-ink text-surface transition-[opacity,transform] duration-200 enabled:active:scale-[0.92] disabled:opacity-25"
+          >
+            {sending ? <span aria-hidden className="composer-spinner size-4 rounded-full border-2 border-current border-r-transparent" /> : <ArrowUp width={18} height={18} strokeWidth={2.2} />}
+          </button>
         </div>
       </div>
     </div>

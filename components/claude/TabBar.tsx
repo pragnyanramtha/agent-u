@@ -5,16 +5,17 @@ import { EditPencil, List, Plus, Xmark } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type SessionSummary } from "@/lib/types";
 import { timeAgo } from "@/lib/client/api";
 import { Pulse } from "./Pulse";
-import { AgentBadge, isBusy } from "./SessionList";
+import { AGENT_TONE, AgentBadge, isBusy } from "./SessionList";
 import { NEW_TAB, type Tab } from "./useTabs";
 
 /* ─────────────────────────────────────────────────────────
  * TABS
- * Beautiful UI's harness tab strip: fixed-width tabs so every
- * close button lands in the same spot, the active tab sits on a
- * hover-2 fill, and "+" trails the last tab. On desktop the strip
- * is the window's title bar; below lg it collapses to a count
- * button that opens a sheet of open tabs.
+ * Quiet browser-style tabs: fixed widths so every close button
+ * lands in the same spot, the current tab a lighter pill, close
+ * buttons on hover (always on the current tab and on touch), and
+ * the agent as a tiny colored mark. The strip shows on desktop once
+ * a second tab is open; below lg it collapses to a count button that
+ * opens a sheet of open tabs.
  * ───────────────────────────────────────────────────────── */
 
 export type TabInfo = {
@@ -48,11 +49,12 @@ export function describeTab(tab: Tab, session: SessionSummary | undefined, listL
   };
 }
 
+/** The tab's favicon: needs you, the new-session pencil, a live pulse, or a resting dot, all in the agent's color. */
 function Indicator({ t, size = 2.5 }: { t: TabInfo; size?: number }) {
   if (t.needsYou) return <span className="size-1.5 shrink-0 rounded-full bg-orange" aria-label="Needs you" role="img" />;
   if (t.id === NEW_TAB) return <EditPencil width={12} height={12} strokeWidth={2} className="shrink-0 text-ink-3" aria-hidden />;
-  if (t.live) return <Pulse busy={t.busy} size={size} />;
-  return null;
+  if (t.live) return <Pulse busy={t.busy} size={size} cellClass={AGENT_TONE[t.agent]} />;
+  return <span className={`size-1.5 shrink-0 rounded-full ${AGENT_TONE[t.agent]} ${t.agent === "claude" ? "opacity-25" : ""}`} aria-hidden />;
 }
 
 const stateLabel = (t: TabInfo) => (t.needsYou ? ", needs you" : t.busy ? ", working" : t.live ? ", open" : "");
@@ -126,7 +128,7 @@ export function TabBar({
 
   return (
     <div
-      className="flex h-11 shrink-0 items-center border-b border-line pr-2 pl-1.5"
+      className="flex h-11 shrink-0 items-center pt-1 pr-2 pl-2"
       onDoubleClick={(e) => e.target === e.currentTarget && onNew()}
     >
       <div
@@ -139,7 +141,7 @@ export function TabBar({
           if (el && Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY;
         }}
       >
-        <div role="tablist" aria-label="Open sessions" aria-orientation="horizontal" className="flex w-max items-center gap-1 px-0.5 py-1" onKeyDown={onKeyDown}>
+        <div role="tablist" aria-label="Open sessions" aria-orientation="horizontal" className="flex w-max items-center gap-0.5 px-0.5 py-1" onKeyDown={onKeyDown}>
           {tabs.map((t, i) => {
             const on = t.id === active;
             return (
@@ -165,9 +167,8 @@ export function TabBar({
                   e.preventDefault();
                   onClose(t.id);
                 }}
-                className={`tab-item group/tab relative flex h-7 w-44 shrink-0 items-center rounded-control pr-0.5 text-[12.5px] font-medium transition-[background-color,color,opacity] duration-100 ${
-                  on ? "bg-hover-2 text-ink" : "text-ink-2 hover:bg-hover hover:text-ink"
-                } ${dragging === t.id ? "opacity-50" : ""}`}
+                data-on={on || undefined}
+                className={`tab-item group/tab relative flex h-8 w-[184px] shrink-0 items-center rounded-control pr-1 text-[13px] transition-[background-color,color,opacity,box-shadow] duration-150 ${dragging === t.id ? "opacity-50" : ""}`}
                 style={{ animation: "tab-in 220ms cubic-bezier(0.23,1,0.32,1) both" }}
               >
                 <button
@@ -178,13 +179,14 @@ export function TabBar({
                   aria-controls="session-panel"
                   aria-label={`${t.title}${t.agent !== "claude" ? `, ${AGENT_LABEL[t.agent]}` : ""}${stateLabel(t)}`}
                   tabIndex={on ? 0 : -1}
-                  title={t.title}
+                  title={t.agent !== "claude" ? `${t.title}\n${AGENT_LABEL[t.agent]}` : t.title}
                   onClick={() => onSelect(t.id)}
-                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-control pl-2.5 text-left focus-visible:outline-offset-[-2px]"
+                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-control pl-2.5 text-left focus-visible:outline-offset-[-2px]"
                 >
-                  <Indicator t={t} />
+                  <span className="flex size-3 shrink-0 items-center justify-center">
+                    <Indicator t={t} />
+                  </span>
                   <span className="min-w-0 truncate">{t.title}</span>
-                  {t.agent !== "claude" && <span className="mr-0.5 shrink-0 font-mono text-[10px] text-ink-3">{AGENT_LABEL[t.agent]}</span>}
                 </button>
                 <button
                   type="button"
@@ -192,11 +194,11 @@ export function TabBar({
                   title="Close (Alt+W)"
                   tabIndex={-1}
                   onClick={() => onClose(t.id)}
-                  className={`ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-chip text-ink-3 transition-[background-color,color,opacity] duration-100 hover:bg-hover-2 hover:text-ink ${
-                    on ? "" : "opacity-70 group-hover/tab:opacity-100"
+                  className={`ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-chip text-ink-3 transition-[background-color,color,opacity] duration-100 hover:bg-hover-2 hover:text-ink pointer-coarse:opacity-100 ${
+                    on ? "" : "opacity-0 group-hover/tab:opacity-100 group-focus-within/tab:opacity-100"
                   }`}
                 >
-                  <Xmark width={12} height={12} strokeWidth={2.2} aria-hidden />
+                  <Xmark width={11} height={11} strokeWidth={2.2} aria-hidden />
                 </button>
               </div>
             );
@@ -206,11 +208,12 @@ export function TabBar({
       <button
         type="button"
         aria-label="New session"
-        title="New session (Alt+T)"
+        data-tip="New tab  Alt T"
+        data-tip-pos="bottom"
         onClick={onNew}
-        className="ml-1 flex size-7 shrink-0 items-center justify-center rounded-control text-ink-3 transition-colors duration-100 hover:bg-hover hover:text-ink"
+        className="ml-1 flex size-8 shrink-0 items-center justify-center rounded-control text-ink-3 transition-colors duration-100 hover:bg-hover hover:text-ink"
       >
-        <Plus width={16} height={16} strokeWidth={2} aria-hidden />
+        <Plus width={17} height={17} strokeWidth={1.8} aria-hidden />
       </button>
     </div>
   );

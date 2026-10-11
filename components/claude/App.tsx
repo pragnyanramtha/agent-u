@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSessions } from "@/lib/client/useSessions";
-import { CommandPalette, OPEN_TERMINAL_EVENT } from "./CommandPalette";
+import { CommandPalette, OPEN_TERMINAL_EVENT, TOGGLE_SIDEBAR_EVENT } from "./CommandPalette";
 import { WebTerminal, type TerminalTarget } from "./WebTerminal";
 import { NewSession } from "./NewSession";
-import { SessionList } from "./SessionList";
+import { SessionList, SessionRail } from "./SessionList";
 import { SessionScreen } from "./SessionScreen";
 import { describeTab, TabBar, TabSheet, TabsButton } from "./TabBar";
 import { NEW_TAB, useTabs } from "./useTabs";
@@ -13,9 +13,34 @@ import { NEW_TAB, useTabs } from "./useTabs";
 const isEditable = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && !["checkbox", "radio", "button"].includes((t as HTMLInputElement).type)));
 
+const SIDEBAR_KEY = "cui:sidebar";
+
+/** Desktop sidebar fold state, persisted. `anim` turns on after the stored state lands so reloads don't animate. */
+function useSidebar() {
+  const [collapsed, setCollapsed] = useState(false);
+  const [anim, setAnim] = useState(false);
+  useLayoutEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem(SIDEBAR_KEY) === "collapsed");
+    } catch {}
+    const id = requestAnimationFrame(() => requestAnimationFrame(() => setAnim(true)));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  const toggle = useCallback(() => {
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem(SIDEBAR_KEY, c ? "open" : "collapsed");
+      } catch {}
+      return !c;
+    });
+  }, []);
+  return { collapsed, anim, toggle };
+}
+
 export function App() {
   const { ready, active, tabs: openTabs, open, newTab: openNewTab, close, reopen, replace, move, cycle, select, syncTitles } = useTabs();
   const [drawer, setDrawer] = useState(false);
+  const sidebar = useSidebar();
   const [sheet, setSheet] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   /* the sidebar's theme pill reads the theme once on mount; remount it after the palette flips the theme */
@@ -89,6 +114,29 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [cycle, reopen, close, select, active, newTab, drawer, sheet]);
 
+  /* Ctrl/Cmd+B (or Ctrl+Shift+S) folds the desktop sidebar, or opens the drawer on a phone */
+  const toggleSidebar = sidebar.toggle;
+  useEffect(() => {
+    const flip = () => {
+      if (window.matchMedia("(min-width: 1024px)").matches) toggleSidebar();
+      else setDrawer((d) => !d);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || e.altKey) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if ((mod && !e.shiftKey && e.code === "KeyB") || (e.ctrlKey && e.shiftKey && e.code === "KeyS")) {
+        e.preventDefault();
+        flip();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener(TOGGLE_SIDEBAR_EVENT, flip);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener(TOGGLE_SIDEBAR_EVENT, flip);
+    };
+  }, [toggleSidebar]);
+
   /* Drawer: focus moves in on open and back to the menu button on close,
    * Escape closes, the page behind can't scroll, and it closes itself if the
    * window grows into the desktop layout. */
@@ -117,8 +165,9 @@ export function App() {
   }, [drawer]);
 
   const dismissSheet = useCallback(() => setSheet(false), []);
-  const list = (
-    <SessionList key={themeKey} sessions={sessions} activeId={sessionId} openIds={openTabs} onPick={openSession} onNew={newTab} error={error} />
+  const closeDrawer = useCallback(() => setDrawer(false), []);
+  const list = (onCollapse: () => void) => (
+    <SessionList key={themeKey} sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onCollapse={onCollapse} error={error} />
   );
   const tabsButton = (
     <TabsButton count={infos.length} attention={infos.some((t) => t.needsYou && t.id !== active)} onClick={() => setSheet(true)} />
@@ -126,8 +175,20 @@ export function App() {
   const activeIndex = openTabs.findIndex((t) => t.id === active);
 
   return (
-    <main className="flex h-[100dvh] bg-canvas text-ink lg:gap-2.5 lg:p-2.5 lg:pl-0">
-      <aside className="hidden w-[264px] shrink-0 lg:flex">{list}</aside>
+    <main className="flex h-[100dvh] bg-page text-ink">
+      <aside
+        className="shell-sidebar relative z-20 hidden shrink-0 bg-sidebar lg:block"
+        style={{ width: sidebar.collapsed ? 52 : 260 }}
+        data-anim={sidebar.anim || undefined}
+        data-collapsed={sidebar.collapsed || undefined}
+      >
+        <div className="shell-face absolute inset-0 overflow-hidden" data-hidden={sidebar.collapsed || undefined} inert={sidebar.collapsed}>
+          <div className="h-full w-[260px]">{list(sidebar.toggle)}</div>
+        </div>
+        <div className="shell-face absolute inset-y-0 left-0 w-[52px]" data-hidden={!sidebar.collapsed || undefined} inert={!sidebar.collapsed}>
+          <SessionRail sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onExpand={sidebar.toggle} />
+        </div>
+      </aside>
 
       <div
         className={`fixed inset-0 z-40 lg:hidden ${drawer ? "" : "pointer-events-none"}`}
@@ -144,7 +205,7 @@ export function App() {
         <div
           ref={drawerRef}
           tabIndex={-1}
-          className="safe-top absolute inset-y-0 left-0 flex w-[86%] max-w-[330px] overscroll-contain bg-canvas pl-[env(safe-area-inset-left)] shadow-overlay outline-none"
+          className="safe-top absolute inset-y-0 left-0 flex w-[86%] max-w-[320px] overscroll-contain bg-sidebar pl-[env(safe-area-inset-left)] shadow-overlay outline-none"
           style={{
             transform: drawer ? "translateX(0)" : "translateX(-104%)",
             /* visible at once on open (so focus can land), hidden only after the slide out */
@@ -153,7 +214,7 @@ export function App() {
           }}
           inert={!drawer}
         >
-          {list}
+          {list(closeDrawer)}
         </div>
       </div>
 
@@ -174,9 +235,9 @@ export function App() {
         onDismiss={dismissSheet}
       />
 
-      {/* the window: on desktop a rounded pane whose title bar is the tab strip */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-page lg:rounded-window lg:border lg:border-line" inert={drawer || sheet}>
-        {ready && (
+      {/* the main area: flush with the sidebar; the tab strip only shows once a second tab is open */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-page" inert={drawer || sheet}>
+        {ready && infos.length > 1 && (
           <div className="hidden lg:block">
             <TabBar tabs={infos} active={active} onSelect={open} onClose={close} onNew={newTab} onMove={move} />
           </div>

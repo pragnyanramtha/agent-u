@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChatBubble, EditPencil, HalfMoon, LogOut, Search, SunLight, Terminal, Xmark } from "iconoir-react";
+import { ChatBubble, EditPencil, HalfMoon, LogOut, Search, SidebarCollapse, SunLight, Terminal, Xmark } from "iconoir-react";
 import type { SessionSummary } from "@/lib/types";
 import { api, shortPath, timeAgo } from "@/lib/client/api";
 import { Pulse } from "./Pulse";
@@ -13,6 +13,9 @@ const THEME_COLOR = { dark: "#17181a", light: "#fafafb" } as const;
 
 /** Fired on window to open the palette from anywhere: `window.dispatchEvent(new Event("open-palette"))`. */
 export const OPEN_PALETTE_EVENT = "open-palette";
+
+/** Fired on window to fold or unfold the sidebar (the drawer on a phone). */
+export const TOGGLE_SIDEBAR_EVENT = "toggle-sidebar";
 
 /** Fired on window with `detail: TerminalTarget` to open the web terminal. */
 export const OPEN_TERMINAL_EVENT = "open-terminal";
@@ -217,6 +220,14 @@ export function CommandPalette({
           const s = sessions?.find((x) => x.id === activeId);
           window.dispatchEvent(new CustomEvent(OPEN_TERMINAL_EVENT, { detail: { cwd: s?.cwd || undefined, label: s?.cwd ? `shell in ${s.cwd}` : "shell" } }));
         },
+      },
+      {
+        id: "a:sidebar",
+        group: "Actions",
+        label: "Toggle sidebar",
+        keywords: "sidebar collapse expand hide show panel rail",
+        icon: <SidebarCollapse width={15} height={15} strokeWidth={1.8} />,
+        run: () => window.dispatchEvent(new Event(TOGGLE_SIDEBAR_EVENT)),
       },
       {
         id: "a:theme",
