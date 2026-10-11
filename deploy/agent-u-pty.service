@@ -1,11 +1,11 @@
 [Unit]
-Description=claude-ui web terminal backend
+Description=agent-u web terminal backend
 After=network-online.target
 
 [Service]
-WorkingDirectory=%h/claude-ui
+WorkingDirectory=%h/agent-u
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/node %h/claude-ui/server/pty.mjs
+ExecStart=/usr/bin/node %h/agent-u/server/pty.mjs
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=5

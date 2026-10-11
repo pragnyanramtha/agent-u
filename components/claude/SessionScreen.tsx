@@ -103,7 +103,7 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
   }, [run?.error]);
 
   useEffect(() => {
-    document.title = view.title ? `${view.title} · Claude` : "Claude";
+    document.title = view.title ? `${view.title} · agent-u` : "agent-u";
   }, [view.title]);
 
   /* the bubble stays until the message shows up in the transcript; failures stay visible with Retry */

@@ -1,4 +1,4 @@
-# claude-ui
+# agent-u
 
 Self-hosted, mobile-friendly web UI for coding-agent CLI sessions running on a server (Claude Code first; Codex,
 OpenCode, Cursor CLI and Devin CLI through adapters). Built on Beautiful UI (Next.js 15, React 19, Tailwind v4, pnpm).
@@ -22,13 +22,13 @@ All machine-specific values live in gitignored env files; `.env.example` documen
 Requirements on the server: Node 22+ (24 recommended), pnpm, python3 (web terminal), the agent CLIs you use
 (`claude`, `codex`, `opencode`, `cursor-agent`, `devin`), optionally zellij/tmux, and `cloudflared` for public access.
 1. `scripts/deploy.sh` (copies code, installs, builds). First time, also create `.env.local` in `DEPLOY_DIR` from `.env.example`.
-2. Install the user units from `deploy/` into `~/.config/systemd/user/`: `claude-ui.service` (app on 127.0.0.1:3311),
-   `claude-ui-pty.service` (web terminal backend on 127.0.0.1:3312). `systemctl --user daemon-reload && systemctl --user enable --now claude-ui claude-ui-pty`.
+2. Install the user units from `deploy/` into `~/.config/systemd/user/`: `agent-u.service` (app on 127.0.0.1:3311),
+   `agent-u-pty.service` (web terminal backend on 127.0.0.1:3312). `systemctl --user daemon-reload && systemctl --user enable --now agent-u agent-u-pty`.
    Run `loginctl enable-linger <user>` so user services survive logout and reboot.
 3. Public URL: never expose the ports directly. Use a Cloudflare named tunnel (quick tunnels can't stream GET SSE):
    `cloudflared tunnel create $TUNNEL_NAME`, `cloudflared tunnel route dns $TUNNEL_NAME $PUBLIC_HOSTNAME`, copy the credentials
-   JSON to the server's `~/.cloudflared/`, write `~/.cloudflared/claude-ui.yml` from `deploy/cloudflared.example.yml`
-   (routes `^/pty` to the terminal backend, everything else to the app), and enable `deploy/claude-ui-tunnel.service`.
+   JSON to the server's `~/.cloudflared/`, write `~/.cloudflared/agent-u.yml` from `deploy/cloudflared.example.yml`
+   (routes `^/pty` to the terminal backend, everything else to the app), and enable `deploy/agent-u-tunnel.service`.
 4. Agent logins happen on the server in a terminal (or the web terminal): `claude` (login), `codex login`,
    `opencode auth login`, `cursor-agent login`, `devin` login.
 

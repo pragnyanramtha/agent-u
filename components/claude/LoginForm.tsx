@@ -38,7 +38,7 @@ export function LoginForm() {
             <Pulse busy={busy} size={4} cellClass="bg-surface" />
           </span>
           <div>
-            <h1 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">Claude</h1>
+            <h1 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">agent-u</h1>
             <p className="text-[12.5px] text-ink-3">Sign in to reach your sessions.</p>
           </div>
         </div>

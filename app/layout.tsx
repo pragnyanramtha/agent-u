@@ -6,11 +6,11 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono-face" });
 
 export const metadata: Metadata = {
-  title: "Claude",
-  description: "Your Claude Code sessions, from any screen.",
+  title: "agent-u",
+  description: "Your coding agents, from any screen.",
   manifest: "/manifest.webmanifest",
   icons: { icon: "/icon.svg", apple: "/apple-touch-icon.png" },
-  appleWebApp: { capable: true, title: "Claude", statusBarStyle: "black-translucent" },
+  appleWebApp: { capable: true, title: "agent-u", statusBarStyle: "black-translucent" },
   robots: { index: false, follow: false },
 };
 

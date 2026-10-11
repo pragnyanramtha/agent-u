@@ -14,7 +14,7 @@ import type { AgentAdapter, AgentSession, HistoryPage } from "./types";
  * History: the CLI's own store, ~/.cursor/chats/<md5(cwd)>/<chatId>/store.db (see cursor-store.ts),
  * read-only via node:sqlite. It holds every chat (terminal or headless) with tool results and
  * timestamps, so it is the source of truth. Web-driven turns also capture their stream-json into
- * ~/.local/share/claude-ui/cursor/<chatId>.jsonl, used only when the store can't be read.
+ * ~/.local/share/agent-u/cursor/<chatId>.jsonl, used only when the store can't be read.
  *
  * Driving: `cursor-agent -p --output-format stream-json --trust [--model M] [--force | --mode plan]
  * [--resume <chatId>] -- <text>`, run in the chat's folder (the store is keyed by md5 of the cwd,
@@ -26,7 +26,7 @@ const HOLD_MS = 4000;
 const PAGE = 400;
 const POLL_MS = 1000;
 
-const captureDir = () => path.join(process.env.XDG_DATA_HOME?.trim() || path.join(os.homedir(), ".local", "share"), "claude-ui", "cursor");
+const captureDir = () => path.join(process.env.XDG_DATA_HOME?.trim() || path.join(os.homedir(), ".local", "share"), "agent-u", "cursor");
 const captureFile = (id: string) => path.join(captureDir(), `${id}.jsonl`);
 
 /* folders of chats started from the web, until their store records one */

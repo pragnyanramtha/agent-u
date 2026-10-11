@@ -5,7 +5,7 @@ import { mapStreamTool } from "./cursor-tools";
 /* `cursor-agent -p --output-format stream-json` events -> Entry[].
  *
  * store.db is the source of truth for history; this mapping covers web-driven turns whose
- * stream we captured (~/.local/share/claude-ui/cursor/<chatId>.jsonl), used when the store
+ * stream we captured (~/.local/share/agent-u/cursor/<chatId>.jsonl), used when the store
  * can't be read (missing, or a future format this adapter doesn't understand).
  *
  * Events (cursor-agent 2026.x): system/init {session_id, model, cwd}; user {message.content[]};

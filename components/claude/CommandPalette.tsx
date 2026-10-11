@@ -21,7 +21,7 @@ const isLive = (s: SessionSummary) => Boolean(s.terminal) || (s.web !== null && 
 
 /**
  * How well `q` matches `text`: prefix > word start > substring > in-order
- * characters (so "clui" finds "claude-ui"). 0 means no match.
+ * characters (so "agu" finds "agent-u"). 0 means no match.
  */
 function score(text: string, q: string) {
   const t = text.toLowerCase();

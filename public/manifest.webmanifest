@@ -1,7 +1,7 @@
 {
-  "name": "Claude",
-  "short_name": "Claude",
-  "description": "Your Claude Code sessions, from any screen.",
+  "name": "agent-u",
+  "short_name": "agent-u",
+  "description": "Your coding agents, from any screen.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#17181a",

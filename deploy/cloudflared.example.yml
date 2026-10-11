@@ -1,4 +1,4 @@
-# ~/.cloudflared/claude-ui.yml on the server. Replace <TUNNEL_ID> and claude.example.com.
+# ~/.cloudflared/agent-u.yml on the server. Replace <TUNNEL_ID> and claude.example.com.
 tunnel: <TUNNEL_ID>
 credentials-file: /home/<user>/.cloudflared/<TUNNEL_ID>.json
 no-autoupdate: true

@@ -125,7 +125,7 @@ export function SessionList({
         <span className="flex size-7 items-center justify-center rounded-[8px] bg-ink">
           <Pulse busy={false} size={3.5} cellClass="bg-surface" />
         </span>
-        <span className="text-[14px] font-semibold tracking-[-0.01em] text-ink">Claude</span>
+        <span className="text-[14px] font-semibold tracking-[-0.01em] text-ink">agent-u</span>
         <button
           type="button"
           onClick={onNew}
