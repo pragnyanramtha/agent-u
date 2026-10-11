@@ -19,6 +19,45 @@ export type Pending = {
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const pendingKey = (id: string) => `pending:${id}`;
 
+/* Live text of non-Claude agents (Codex, OpenCode, Cursor, Devin) arrives under msgIds
+ * "live:<key>:<turn>:<segment>" that persisted entries never share. A persisted text/thinking
+ * entry takes over the live streams it matches: one whose id ends in the entry's id, else
+ * those whose text it contains, else the oldest one that begins the same way. Replaced
+ * streams ignore later deltas. A stream that ran on past the entry (one stdout stream for
+ * several messages) only loses the persisted part. The server replays a running turn's text
+ * on every (re)connect, so a history event clears live streams first. */
+const isLive = (msgId: string) => msgId.startsWith("live:");
+const streamKey = (s: { msgId: string; index: number }) => `${s.msgId}\0${s.index}`;
+/** a replayed live stream longer than this that is already on screen as an entry isn't shown again */
+const REPLAY_MIN = 40;
+const HEAD = 24;
+
+type TextEntry = Extract<Entry, { kind: "text" | "thinking" }>;
+
+/** live streams the entry replaces, and ones it only trims */
+function liveMatches(streams: Stream[], e: TextEntry): { gone: Stream[]; trimmed: Map<Stream, string> } {
+  const none = { gone: [], trimmed: new Map<Stream, string>() };
+  const live = streams.filter((s) => isLive(s.msgId) && s.kind === e.kind);
+  if (!live.length) return none;
+  const ids = [e.msgId, e.id].filter((id) => id.length >= 8);
+  const exact = live.filter((s) => ids.some((id) => s.msgId.endsWith(`:${id}`)));
+  if (exact.length) return { ...none, gone: exact };
+  const text = norm(e.text);
+  /* the oldest stream the entry contains, plus any other long ones (a pause split one message); a
+   * short later stream ("The") inside an older message is the next message starting, so it stays */
+  const contained = live.filter((s) => text.includes(norm(s.text)));
+  if (contained.length) return { ...none, gone: contained.filter((s, i) => i === 0 || norm(s.text).length >= REPLAY_MIN) };
+  const raw = e.text.trim();
+  const head = Math.min(HEAD, text.length);
+  for (const s of live) {
+    const body = s.text.trimStart();
+    if (raw && body.startsWith(raw)) return { ...none, trimmed: new Map([[s, body.slice(raw.length)]]) };
+    const t = norm(body);
+    if (head && t.length >= head && t.slice(0, head) === text.slice(0, head)) return { ...none, gone: [s] };
+  }
+  return none;
+}
+
 export type SessionView = {
   status: "connecting" | "open" | "reconnecting" | "missing";
   entries: Entry[];
@@ -32,6 +71,8 @@ export type SessionView = {
   cwd: string;
   permissionMode: PermissionMode | null;
   streams: Stream[];
+  /** live streams (see isLive) already replaced by persisted entries */
+  dropped: Set<string>;
   pending: Pending[];
 };
 
@@ -59,6 +100,7 @@ const initial = (): SessionView => ({
   cwd: "",
   permissionMode: null,
   streams: [],
+  dropped: new Set(),
   pending: [],
 });
 
@@ -68,6 +110,7 @@ function merge(state: SessionView, batch: Entry[], where: "append" | "prepend"):
   const ids = new Set(state.ids);
   let results = state.results;
   let streams = state.streams;
+  let dropped = state.dropped;
   let pending = state.pending;
   const fresh: Entry[] = [];
   for (const e of batch) {
@@ -83,6 +126,21 @@ function merge(state: SessionView, batch: Entry[], where: "append" | "prepend"):
       /* the persisted block replaces the oldest live stream of the same kind for that message */
       const i = streams.findIndex((s) => s.msgId === e.msgId && s.kind === e.kind);
       if (i !== -1) streams = streams.filter((_, j) => j !== i);
+      else if (where === "append") {
+        /* other agents' live streams (see isLive) */
+        const { gone, trimmed } = liveMatches(streams, e);
+        if (e.kind === "text" && gone.length) {
+          /* reasoning that streamed before this text is done too (some agents never persist it) */
+          const at = streams.indexOf(gone[0]);
+          gone.push(...streams.slice(0, at).filter((s) => isLive(s.msgId) && s.kind === "thinking"));
+        }
+        if (gone.length) {
+          streams = streams.filter((s) => !gone.includes(s));
+          dropped = new Set(dropped);
+          gone.forEach((s) => dropped.add(streamKey(s)));
+        }
+        if (trimmed.size) streams = streams.map((s) => (trimmed.has(s) ? { ...s, text: trimmed.get(s)! } : s));
+      }
     }
     if (e.kind === "user" && pending.length) {
       const i = pending.findIndex((p) => norm(p.text) === norm(e.text));
@@ -95,6 +153,7 @@ function merge(state: SessionView, batch: Entry[], where: "append" | "prepend"):
     ids,
     results,
     streams,
+    dropped,
     pending,
     entries: where === "append" ? [...state.entries, ...fresh] : [...fresh, ...state.entries],
   };
@@ -106,9 +165,11 @@ function reducer(state: SessionView, action: Action): SessionView {
       const e = action.event;
       if (e.type === "history") {
         const first = state.status === "connecting";
-        const merged = merge(first ? { ...state, entries: [], ids: new Set(), results: {} } : state, e.entries, "append");
+        const merged = merge(first ? { ...state, entries: [], ids: new Set(), results: {}, dropped: new Set() } : state, e.entries, "append");
         return {
           ...merged,
+          /* the server replays a running turn's live text after every history event */
+          streams: merged.streams.some((s) => isLive(s.msgId)) ? merged.streams.filter((s) => !isLive(s.msgId)) : merged.streams,
           status: "open",
           cursor: first ? e.cursor : state.cursor,
           terminal: e.terminal,
@@ -127,7 +188,22 @@ function reducer(state: SessionView, action: Action): SessionView {
       if (e.type === "delta") {
         const d = e.delta;
         const i = state.streams.findIndex((s) => s.msgId === d.msgId && s.index === d.index);
-        const streams = i === -1 ? [...state.streams, { ...d }] : state.streams.map((s, j) => (j === i ? { ...s, text: s.text + d.text } : s));
+        let text = d.text;
+        if (isLive(d.msgId)) {
+          /* only while the turn runs, and never again once a persisted entry took over */
+          if ((state.run?.status !== "running" && state.run?.status !== "starting") || state.dropped.has(streamKey(d))) return state;
+          /* a replay (after a reload) of text that already landed as entries of this turn */
+          if (i === -1 && norm(text).length >= REPLAY_MIN) {
+            const from = state.entries.findLastIndex((x) => x.kind === "user") + 1;
+            for (const x of state.entries.slice(from)) {
+              if (x.kind !== d.kind) continue;
+              if (norm(x.text).includes(norm(text))) return { ...state, dropped: new Set(state.dropped).add(streamKey(d)) };
+              const raw = x.text.trim();
+              if (raw && text.trimStart().startsWith(raw)) text = text.trimStart().slice(raw.length);
+            }
+          }
+        }
+        const streams = i === -1 ? [...state.streams, { ...d, text }] : state.streams.map((s, j) => (j === i ? { ...s, text: s.text + text } : s));
         return { ...state, streams };
       }
       return state;

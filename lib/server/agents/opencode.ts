@@ -1,8 +1,11 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Entry } from "@/lib/types";
-import { rekeyTurn, startTurn, stopTurn, turnState } from "./cli-run";
+import { liveStream, rekeyTurn, startTurn, stopTurn, turnState, type Run } from "./cli-run";
 import { changedSince, getSession, historyPage, listSessions, sessionEnd, sessionsSince } from "./opencode-store";
 import type { AgentAdapter, AgentSession, CliRunState, SendOptions, StartOptions } from "./types";
 
@@ -76,10 +79,134 @@ function runArgs(opts: SendOptions): string[] {
   return args;
 }
 
+/* ── live streaming ──────────────────────────────────────────
+ * `opencode run --format json` only prints finished parts. To stream, each web turn gets
+ * its own `opencode serve` on a free loopback port (password-protected), `opencode run
+ * --attach` drives it exactly like a standalone run, and we read the server's /event
+ * stream: message.part.updated announces a part (type "text" | "reasoning" | ...),
+ * message.part.delta {partID, field: "text", delta} grows it (older versions put a
+ * `delta` on message.part.updated instead). If the server can't start, the turn runs
+ * standalone without live text. */
+
+const SERVE_TIMEOUT_MS = 15_000;
+
+type Serve = { url: string; password: string; child: ChildProcess; stderr: () => string };
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+async function startServe(bin: string, cwd: string): Promise<Serve | null> {
+  try {
+    const port = await freePort();
+    const password = randomBytes(24).toString("base64url");
+    const child = spawn(bin, ["serve", "--port", String(port), "--hostname", "127.0.0.1", "--print-logs", "--log-level", "ERROR"], {
+      cwd,
+      env: { ...process.env, PWD: cwd, OPENCODE_SERVER_PASSWORD: password },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.on("data", (c: Buffer) => (stderr = (stderr + c.toString("utf8")).slice(-8000)));
+    const url = await new Promise<string | null>((resolve) => {
+      let out = "";
+      const timer = setTimeout(() => resolve(null), SERVE_TIMEOUT_MS);
+      child.stdout?.on("data", (c: Buffer) => {
+        out += c.toString("utf8");
+        const m = /listening on (https?:\/\/[^\s]+)/.exec(out);
+        if (m) {
+          clearTimeout(timer);
+          resolve(m[1].replace(/\/$/, ""));
+        }
+      });
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve(null);
+      });
+      child.once("error", () => {
+        clearTimeout(timer);
+        resolve(null);
+      });
+    });
+    if (!url) {
+      child.kill("SIGTERM");
+      return null;
+    }
+    return { url, password, child, stderr: () => stderr };
+  } catch {
+    return null;
+  }
+}
+
+/** Reads the server's event stream and pushes text/reasoning deltas of the turn's session. */
+async function streamEvents(serve: Serve, cwd: string, signal: AbortSignal, session: () => string | null, adoptRoot: (id: string) => void, push: (part: string, kind: "text" | "thinking", text: string) => void) {
+  const res = await fetch(`${serve.url}/event?directory=${encodeURIComponent(cwd)}`, {
+    headers: { authorization: `Basic ${Buffer.from(`opencode:${serve.password}`).toString("base64")}`, accept: "text/event-stream" },
+    signal,
+  });
+  if (!res.ok || !res.body) return;
+  const kinds = new Map<string, string>();
+  const mine = (id: unknown) => typeof id === "string" && id === session();
+  const kindOf = (part: string) => {
+    const t = kinds.get(part);
+    return t === "text" ? "text" : t === "reasoning" ? "thinking" : null;
+  };
+  const handle = (raw: string) => {
+    let m: Record<string, unknown>;
+    try {
+      m = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const ev = (m.payload && typeof m.payload === "object" ? m.payload : m) as { type?: string; properties?: Record<string, unknown> };
+    const p = ev.properties ?? {};
+    if (ev.type === "session.created") {
+      const info = (p.info ?? {}) as { id?: string; parentID?: string };
+      if (info.id && !info.parentID) adoptRoot(info.id);
+    } else if (ev.type === "message.part.updated") {
+      const part = (p.part ?? {}) as { id?: string; type?: string; sessionID?: string };
+      if (!part.id || !mine(part.sessionID)) return;
+      kinds.set(part.id, String(part.type));
+      const kind = kindOf(part.id);
+      if (kind && typeof p.delta === "string") push(part.id, kind, p.delta);
+    } else if (ev.type === "message.part.delta") {
+      if (p.field !== "text" || !mine(p.sessionID) || typeof p.partID !== "string" || typeof p.delta !== "string") return;
+      const kind = kindOf(p.partID);
+      if (kind) push(p.partID, kind, p.delta);
+    }
+  };
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buf += value;
+    let cut;
+    while ((cut = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, cut);
+      buf = buf.slice(cut + 2);
+      const data = frame
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).replace(/^ /, ""))
+        .join("\n");
+      if (data) handle(data);
+    }
+  }
+}
+
 /** Spawns one turn; `onSession` sees the session id from the first JSON event. */
 async function spawnTurn(key: string, cwd: string, text: string, opts: SendOptions, extra: string[], onSession?: (id: string) => void) {
   const bin = await binary();
   if (!bin) throw new Error("OpenCode isn't installed (no `opencode` binary found).");
+  if (turnState(key)?.status === "running") throw new Error("A turn is already running for this session.");
+  const serve = await startServe(bin, cwd);
   let current = key;
   turnErrors.delete(current);
   /** move the run (and any error seen so far) from the provisional key to the real session id */
@@ -93,34 +220,67 @@ async function spawnTurn(key: string, cwd: string, text: string, opts: SendOptio
     else turnErrors.delete(next);
     current = next;
   };
+  /** the turn's top-level session (subagent sessions stream too, but aren't shown live) */
+  let root: string | null = extra[0] === "--session" ? extra[1] : null;
+  const learn = (id: string) => {
+    if (root && root !== id && extra[0] === "--session") return;
+    root = id;
+    if (onSession) {
+      adopt(id);
+      onSession(id);
+    }
+  };
   let stderr = () => "";
   const raw: unknown[] = [];
-  const run = startTurn(
-    key,
-    // PWD matters: `opencode run` resolves its project from $PWD before process.cwd()
-    { cmd: bin, args: [...runArgs(opts), ...extra], cwd, env: { PWD: cwd }, stdin: text },
-    (line) => {
-      let ev: Record<string, unknown>;
-      try {
-        ev = JSON.parse(line);
-      } catch {
-        return;
-      }
-      if (typeof ev.sessionID === "string" && onSession) {
-        adopt(ev.sessionID);
-        onSession(ev.sessionID);
-      }
-      if (ev.type === "error") {
-        raw.push(ev.error);
-        turnErrors.set(current, raw.map((e) => describeError(e, stderr())).join("\n"));
-      }
-    },
-  );
-  stderr = () => run.stderr;
+  let run: Run;
+  try {
+    run = startTurn(
+      key,
+      // PWD matters: `opencode run` resolves its project from $PWD before process.cwd()
+      {
+        cmd: bin,
+        args: [...runArgs(opts), ...(serve ? ["--attach", serve.url] : []), ...extra],
+        cwd,
+        env: serve ? { PWD: cwd, OPENCODE_SERVER_PASSWORD: serve.password } : { PWD: cwd },
+        stdin: text,
+      },
+      (line) => {
+        let ev: Record<string, unknown>;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          return;
+        }
+        if (typeof ev.sessionID === "string") learn(ev.sessionID);
+        if (ev.type === "error") {
+          raw.push(ev.error);
+          turnErrors.set(current, raw.map((e) => describeError(e, stderr())).join("\n"));
+        }
+      },
+    );
+  } catch (err) {
+    serve?.child.kill("SIGTERM");
+    throw err;
+  }
+  // with --attach the server logs the errors that JSON `error` events refer to
+  stderr = () => run.stderr + (serve ? `\n${serve.stderr()}` : "");
   // stderr and stdout race: resolve log refs again once both pipes are drained
   run.child.on("close", () => {
-    if (raw.length) turnErrors.set(current, raw.map((e) => describeError(e, run.stderr)).join("\n"));
+    if (raw.length) turnErrors.set(current, raw.map((e) => describeError(e, stderr())).join("\n"));
   });
+  if (serve) {
+    const live = liveStream(run);
+    const abort = new AbortController();
+    void streamEvents(serve, cwd, abort.signal, () => root, (id) => !root && learn(id), live.push).catch(() => undefined);
+    run.child.on("exit", () => {
+      abort.abort();
+      serve.child.kill("SIGTERM");
+    });
+    /* a server that dies mid-turn takes the attached run with it */
+    serve.child.on("exit", () => {
+      if (run.state.status === "running") setTimeout(() => run.state.status === "running" && run.child.kill("SIGTERM"), 3000);
+    });
+  }
   return { run, key: () => current, adopt };
 }
 

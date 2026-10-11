@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Folder, Menu } from "iconoir-react";
 import LoadingState from "@/components/primitives/LoadingState";
 import { AGENT_LABEL, type AgentId, type PermissionMode, type SessionSummary } from "@/lib/types";
@@ -29,11 +29,14 @@ export function NewSession({
   sessions,
   onMenu,
   onOpen,
+  extra,
 }: {
   projects: string[];
   sessions: SessionSummary[] | null;
   onMenu: () => void;
   onOpen: (id: string) => void;
+  /** trailing header control (the phone tab switcher) */
+  extra?: ReactNode;
 }) {
   const [stage, setStage] = useState(0);
   const [cwd, setCwd] = useState("");
@@ -43,7 +46,10 @@ export function NewSession({
   const [agents, setAgents] = useState<{ id: AgentId; label: string; installed: boolean }[]>([]);
   useEffect(() => {
     const saved = localStorage.getItem("cui:newAgent") as AgentId | null;
-    if (saved) setAgent(saved);
+    if (saved) {
+      setAgent(saved);
+      if (saved !== "claude") setMode("bypassPermissions");
+    }
     api<{ agents: { id: AgentId; label: string; installed: boolean }[] }>("/api/agents")
       .then((d) => setAgents(d.agents))
       .catch(() => undefined);
@@ -51,6 +57,8 @@ export function NewSession({
   const pickAgent = (a: AgentId) => {
     setAgent(a);
     setModel("");
+    /* other agents can't show approval prompts from their print modes yet: run them unattended */
+    setMode(a === "claude" ? "default" : "bypassPermissions");
     localStorage.setItem("cui:newAgent", a);
   };
   const name = AGENT_LABEL[agent];
@@ -106,10 +114,12 @@ export function NewSession({
   return (
     <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="safe-top flex shrink-0 items-center px-[max(0.375rem,env(safe-area-inset-left))] lg:hidden">
-        <div className="flex h-14 items-center">
+        <div className="flex h-14 w-full items-center gap-1 pr-[max(0.375rem,env(safe-area-inset-right))]">
           <button type="button" onClick={onMenu} aria-label="Open sessions" aria-haspopup="dialog" data-drawer-opener className="flex size-10 items-center justify-center rounded-[10px] text-ink-2 hover:bg-hover hover:text-ink">
             <Menu width={19} height={19} strokeWidth={1.8} />
           </button>
+          <span className="min-w-0 flex-1 truncate px-1 text-[14.5px] font-semibold tracking-[-0.01em] text-ink">New session</span>
+          {extra}
         </div>
       </header>
 

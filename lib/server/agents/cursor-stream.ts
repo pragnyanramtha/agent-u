@@ -25,6 +25,39 @@ const textOf = (message: unknown) =>
         .join("")
     : "";
 
+/**
+ * With --stream-partial-output, assistant text arrives as delta events (`timestamp_ms`, no
+ * `model_call_id`), then once more in full per segment: with `model_call_id` before a tool
+ * call, without `timestamp_ms` at the end of the turn. Without the flag only full ones come.
+ */
+export const isPartialAssistant = (ev: Obj) => ev.type === "assistant" && typeof ev.timestamp_ms === "number" && ev.model_call_id === undefined;
+
+/** Live deltas from a running turn's stream-json lines: assistant text deltas and thinking deltas. */
+export function liveParser(push: (segment: string, kind: "text" | "thinking", text: string) => void) {
+  let text = 0;
+  let thinking = 0;
+  return (line: string) => {
+    if (!line.startsWith("{")) return;
+    let ev: unknown;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (!isObj(ev)) return;
+    if (ev.type === "assistant") {
+      if (isPartialAssistant(ev)) push(`t${text}`, "text", textOf(ev.message));
+      else text++;
+    } else if (ev.type === "thinking") {
+      if (ev.subtype === "delta" && typeof ev.text === "string") push(`th${thinking}`, "thinking", ev.text);
+      else if (ev.subtype === "completed") thinking++;
+    } else if (ev.type === "tool_call" && ev.subtype === "started") {
+      text++;
+      thinking++;
+    }
+  };
+}
+
 /** Stateful mapper over one capture (feed events in order). */
 export function streamMapper(prefix = "s") {
   let model = "cursor";
@@ -59,6 +92,8 @@ export function streamMapper(prefix = "s") {
         } else if (ev.subtype === "completed") flushThinking();
         break;
       case "assistant": {
+        /* --stream-partial-output deltas; the full segment follows as its own event */
+        if (isPartialAssistant(ev)) break;
         flushThinking();
         const text = textOf(ev.message);
         if (text.trim()) out.push({ kind: "text", id, ts, msgId: turn || id, text });

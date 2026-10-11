@@ -238,12 +238,8 @@ function Notice({ entry }: { entry: Extract<Entry, { kind: "notice" }> }) {
 }
 
 function LiveText({ text }: { text: string }) {
-  return (
-    <p className="prose-claude whitespace-pre-wrap">
-      {text}
-      <span className="stream-caret is-streaming" />
-    </p>
-  );
+  /* streaming mode repairs half-written markdown and draws the caret after the last block */
+  return <Markdown text={text} streaming />;
 }
 
 export function Thread({

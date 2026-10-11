@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GitCompare, Menu, MoreHoriz, Terminal } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type PermissionMode } from "@/lib/types";
 import { AgentBadge } from "./SessionList";
@@ -32,7 +32,20 @@ function useMeasure<T extends HTMLElement>() {
   return [ref, h] as const;
 }
 
-export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; onMenu: () => void; onNavigate: (id: string) => void; onNew: () => void }) {
+export function SessionScreen({
+  id,
+  onMenu,
+  onNavigate,
+  onNew,
+  extra,
+}: {
+  id: string;
+  onMenu: () => void;
+  onNavigate: (id: string) => void;
+  onNew: () => void;
+  /** trailing header control (the phone tab switcher) */
+  extra?: ReactNode;
+}) {
   const { view, loadOlder, addPending, updatePending, dropPending } = useSession(id, onNavigate);
   const [localMode, setLocalMode] = useState<PermissionMode | null>(null);
   const [localModel, setLocalModel] = useState<string | null>(null);
@@ -199,7 +212,7 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
     <div className="relative flex min-h-0 min-w-0 flex-1">
     <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="safe-top safe-x flex shrink-0 items-center border-b border-line">
-        <div className="flex h-14 w-full min-w-0 items-center gap-1 px-1.5 sm:gap-2 sm:px-4">
+        <div className="flex h-14 w-full min-w-0 items-center gap-1 px-1.5 sm:gap-2 sm:px-4 lg:h-12">
           <button type="button" onClick={onMenu} aria-label="Open sessions" aria-haspopup="dialog" data-drawer-opener className="flex size-10 shrink-0 items-center justify-center rounded-[10px] text-ink-2 hover:bg-hover hover:text-ink lg:hidden">
             <Menu width={19} height={19} strokeWidth={1.8} />
           </button>
@@ -281,6 +294,7 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
               )}
             </div>
           )}
+          {extra}
         </div>
       </header>
       {peek && terminal && !run && <TerminalPeek id={id} pid={terminal.pid} where={where ?? "terminal"} onClose={() => setPeek(false)} />}

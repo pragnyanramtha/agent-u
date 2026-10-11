@@ -51,7 +51,14 @@ Requirements on the server: Node 22+ (24 recommended), pnpm, python3 (web termin
 - Messages sent while Claude is mid-turn land in the transcript as `attachment` records (`queued_command`).
 - Other agents: `lib/server/agents/<agent>.ts` implement `AgentAdapter` (`lib/server/agents/types.ts`) and emit the same
   `Entry` stream; session ids are `<agent>:<nativeId>` (plain ids are Claude, so old links keep working). Web-driven turns use
-  each CLI's non-interactive mode via `lib/server/agents/cli-run.ts`. Route glue in `lib/server/agents/routes.ts`.
+  each CLI's own driver via `lib/server/agents/cli-run.ts` (which also carries live `live:` text deltas). Route glue in
+  `lib/server/agents/routes.ts`. Codex turns use `codex app-server` (JSON-RPC, streams; `CODEX_WEB_DRIVER=exec` falls back
+  to `codex exec --json`); OpenCode turns start a private `opencode serve` and `opencode run --attach` (its `/event` stream
+  gives deltas); Cursor uses `cursor-agent -p --output-format stream-json --stream-partial-output`; Devin streams stdout of
+  `devin -p`. Other agents default to Bypass in the UI (their print modes can't show approval prompts yet).
+- Markdown: `components/claude/Markdown.tsx` renders with Streamdown (lazy-loaded; KaTeX only when a message has math;
+  raw HTML is never rendered; code blocks use CodeCard). Live text uses the same renderer in streaming mode.
+- Shell: harness-style tabs (`components/claude/useTabs.ts`, `TabBar.tsx`); only the active tab's session is mounted.
 - Web terminal: `server/pty.mjs` runs a shell, or attaches to the session's zellij/tmux, on a pty via `server/pty_bridge.py`
   (no native Node module).
 - UI copy: no em dashes; loading labels end with an ellipsis.

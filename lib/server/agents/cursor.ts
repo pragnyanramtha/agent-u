@@ -3,10 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Entry, PermissionMode } from "@/lib/types";
-import { rekeyTurn, startTurn, stopTurn, turnState } from "./cli-run";
+import { liveStream, rekeyTurn, startTurn, stopTurn, turnState } from "./cli-run";
 import { storeEntries } from "./cursor-entries";
 import { chatDirs, chatStat, findChatDir, readMetaJson, readStore, type StoreChat } from "./cursor-store";
-import { streamEntries } from "./cursor-stream";
+import { isPartialAssistant, liveParser, streamEntries } from "./cursor-stream";
 import type { AgentAdapter, AgentSession, HistoryPage } from "./types";
 
 /* Cursor CLI (`cursor-agent`, also installed as `agent`).
@@ -16,7 +16,7 @@ import type { AgentAdapter, AgentSession, HistoryPage } from "./types";
  * timestamps, so it is the source of truth. Web-driven turns also capture their stream-json into
  * ~/.local/share/agent-u/cursor/<chatId>.jsonl, used only when the store can't be read.
  *
- * Driving: `cursor-agent -p --output-format stream-json --trust [--model M] [--force | --mode plan]
+ * Driving: `cursor-agent -p --output-format stream-json --stream-partial-output --trust [--model M] [--force | --mode plan]
  * [--resume <chatId>] -- <text>`, run in the chat's folder (the store is keyed by md5 of the cwd,
  * so a resume from another folder wouldn't find the chat). Print mode never prompts: without
  * --force, commands outside the user's allowlist are declined and the agent carries on. */
@@ -275,6 +275,8 @@ function args(text: string, o: { model?: string; mode: PermissionMode; resume?: 
     "-p",
     "--output-format",
     "stream-json",
+    /* assistant text as deltas too, for the live view (cursor-stream.ts tells them apart) */
+    "--stream-partial-output",
     "--trust",
     ...(o.model ? ["--model", o.model] : []),
     ...modeArgs(o.mode),
@@ -332,6 +334,14 @@ function capturer(initialId: string | null) {
   };
   return {
     line(l: string) {
+      /* partial text deltas are only for the live view; the full segment follows */
+      if (l.includes('"type":"assistant"') && !l.includes('"model_call_id"')) {
+        try {
+          if (isPartialAssistant(JSON.parse(l))) return;
+        } catch {
+          /* not JSON: dropped by write() anyway */
+        }
+      }
       if (id) write([l]);
       else pending.push(l);
     },
@@ -350,8 +360,10 @@ async function start(opts: { cwd: string; text: string; model?: string; mode: Pe
   return new Promise((resolve, reject) => {
     let settled = false;
     let run: ReturnType<typeof startTurn>;
+    let live: (line: string) => void = () => {};
     try {
       run = startTurn(tmp, { cmd: bin, args: args(opts.text, opts), cwd: opts.cwd, env: { NO_OPEN_BROWSER: "1" } }, (line) => {
+        live(line);
         cap.line(line);
         if (settled || !line.startsWith("{")) return;
         try {
@@ -371,6 +383,7 @@ async function start(opts: { cwd: string; text: string; model?: string; mode: Pe
       reject(err);
       return;
     }
+    live = liveParser(liveStream(run).push);
     run.child.on("exit", (code) => {
       if (settled) return;
       settled = true;
@@ -399,7 +412,12 @@ async function send(id: string, text: string, opts: { model?: string; mode: Perm
   if (!cwd || !fs.existsSync(cwd)) throw new Error("Couldn't work out which folder this Cursor chat belongs to, so it can't be resumed here.");
   const cap = capturer(id);
   /* failures (e.g. "Authentication required. Please run 'agent login' first") land in runState().error via cli-run */
-  startTurn(KEY(id), { cmd: bin, args: args(text, { ...opts, resume: id }), cwd, env: { NO_OPEN_BROWSER: "1" } }, (line) => cap.line(line));
+  let live: (line: string) => void = () => {};
+  const run = startTurn(KEY(id), { cmd: bin, args: args(text, { ...opts, resume: id }), cwd, env: { NO_OPEN_BROWSER: "1" } }, (line) => {
+    live(line);
+    cap.line(line);
+  });
+  live = liveParser(liveStream(run).push);
 }
 
 const adapter: AgentAdapter = {

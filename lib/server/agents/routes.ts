@@ -5,7 +5,7 @@ import type { AgentId, PermissionMode, ServerEvent } from "@/lib/types";
 import { parseMode, str } from "../http";
 import { InputRefused, inputTarget, typeIntoTerminal } from "../input";
 import { terminalOf, toRunState } from "./bridge";
-import { onTurn } from "./cli-run";
+import { onDelta, onTurn } from "./cli-run";
 import { adapterFor, sessionKey } from "./index";
 
 /* Route handlers for non-Claude sessions (ids "<agent>:<nativeId>").
@@ -68,6 +68,8 @@ export async function agentEvents(req: NextRequest, agent: AgentId, native: stri
       send({ type: "history", entries: [], cursor: null, terminal, run: runOf(), title: session?.title || `New ${a.label} session`, cwd: session?.cwd ?? "", permissionMode: modes.get(key) ?? null });
       cleanups.push(a.watch(native, start, (entries, end) => entries.length && send({ type: "entries", entries }, end)));
       cleanups.push(onTurn(key, () => send({ type: "run", run: runOf() })));
+      /* live text of a web-driven turn; a running turn replays its text so far right after the history event */
+      cleanups.push(onDelta(key, (delta) => send({ type: "delta", delta })));
       let last = JSON.stringify(terminal);
       const tick = setInterval(async () => {
         const t = await terminalOf(a, native).catch(() => null);

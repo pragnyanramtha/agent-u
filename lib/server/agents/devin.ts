@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Entry, PermissionMode } from "@/lib/types";
-import { rekeyTurn, startTurn, stopTurn, turnState } from "./cli-run";
+import { liveStream, rekeyTurn, startTurn, stopTurn, turnState, type Run } from "./cli-run";
 import {
   devinDataDir,
   devinLocksDir,
@@ -256,7 +256,9 @@ async function start(opts: { cwd: string; text: string; model?: string; mode: Pe
   const known = new Set(db ? listAllIds(db) : []);
   const t0 = Date.now();
   const tempKey = `devin:pending-${t0.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const run = startTurn(tempKey, { cmd: bin, args: argsFor(promptFor(opts.text, opts.mode, null), opts.mode, opts.model, null), cwd: opts.cwd });
+  let onChunk: (chunk: string) => void = () => {};
+  const run = startTurn(tempKey, { cmd: bin, args: argsFor(promptFor(opts.text, opts.mode, null), opts.mode, opts.model, null), cwd: opts.cwd }, undefined, (c) => onChunk(c));
+  onChunk = liveText(run);
   const rootPid = run.child.pid ?? -1;
 
   const discover = (): string | null => {
@@ -299,6 +301,26 @@ async function start(opts: { cwd: string; text: string; model?: string; mode: Pe
   });
 }
 
+/* Print mode writes the reply to stdout as plain text while it streams. There is no message boundary
+ * in it, so a pause (a tool running) starts a new live segment; the client swaps each for the
+ * persisted message that contains it. */
+const SEGMENT_GAP_MS = 2000;
+const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g;
+
+function liveText(run: Run) {
+  const live = liveStream(run);
+  let segment = 0;
+  let last = 0;
+  return (chunk: string) => {
+    const text = chunk.replace(ANSI, "").replace(/\r/g, "");
+    if (!text) return;
+    const now = Date.now();
+    if (last && now - last > SEGMENT_GAP_MS) segment++;
+    last = now;
+    live.push(segment, "text", text);
+  };
+}
+
 function listAllIds(db: NonNullable<ReturnType<typeof openDb>>): string[] {
   return (db.prepare("SELECT id FROM sessions").all() as { id: string }[]).map((r) => String(r.id));
 }
@@ -310,7 +332,9 @@ async function send(id: string, text: string, opts: { model?: string; mode: Perm
   const row = db ? getSession(db, id) : null;
   if (!row) throw new Error("Devin session not found.");
   const cwd = row.cwd && fs.existsSync(row.cwd) ? row.cwd : os.homedir();
-  const run = startTurn(keyOf(id), { cmd: bin, args: argsFor(promptFor(text, opts.mode, row.agentMode), opts.mode, opts.model, id), cwd });
+  let onChunk: (chunk: string) => void = () => {};
+  const run = startTurn(keyOf(id), { cmd: bin, args: argsFor(promptFor(text, opts.mode, row.agentMode), opts.mode, opts.model, id), cwd }, undefined, (c) => onChunk(c));
+  onChunk = liveText(run);
   if (run.child.pid) pids.set(keyOf(id), run.child.pid);
 }
 

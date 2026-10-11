@@ -1,0 +1,367 @@
+"use client";
+
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { EditPencil, List, Plus, Xmark } from "iconoir-react";
+import { AGENT_LABEL, type AgentId, type SessionSummary } from "@/lib/types";
+import { timeAgo } from "@/lib/client/api";
+import { Pulse } from "./Pulse";
+import { AgentBadge, isBusy } from "./SessionList";
+import { NEW_TAB, type Tab } from "./useTabs";
+
+/* ─────────────────────────────────────────────────────────
+ * TABS
+ * Beautiful UI's harness tab strip: fixed-width tabs so every
+ * close button lands in the same spot, the active tab sits on a
+ * hover-2 fill, and "+" trails the last tab. On desktop the strip
+ * is the window's title bar; below lg it collapses to a count
+ * button that opens a sheet of open tabs.
+ * ───────────────────────────────────────────────────────── */
+
+export type TabInfo = {
+  id: string;
+  title: string;
+  agent: AgentId;
+  /** open in a terminal or a live web run */
+  live: boolean;
+  busy: boolean;
+  needsYou: boolean;
+  /** project · where/when, for the phone sheet */
+  meta: string | null;
+};
+
+export function describeTab(tab: Tab, session: SessionSummary | undefined, listLoaded: boolean, now = Date.now()): TabInfo {
+  if (tab.id === NEW_TAB) return { id: tab.id, title: "New session", agent: "claude", live: false, busy: false, needsYou: false, meta: null };
+  const agent = (tab.id.includes(":") ? tab.id.slice(0, tab.id.indexOf(":")) : "claude") as AgentId;
+  if (!session) {
+    return { id: tab.id, title: tab.title ?? (listLoaded ? "Session" : "Loading…"), agent: AGENT_LABEL[agent] ? agent : "claude", live: false, busy: false, needsYou: false, meta: null };
+  }
+  const live = Boolean(session.terminal) || (session.web !== null && session.web.status !== "closed");
+  const where = session.web ? "web" : session.terminal?.multiplexer ?? (session.terminal ? "terminal" : null);
+  return {
+    id: tab.id,
+    title: session.title || tab.title || "Session",
+    agent: session.agent,
+    live,
+    busy: live && isBusy(session),
+    needsYou: (session.web?.pending.length ?? 0) > 0,
+    meta: `${session.project || "No folder"} · ${live && where ? where : timeAgo(session.mtime, now)}`,
+  };
+}
+
+function Indicator({ t, size = 2.5 }: { t: TabInfo; size?: number }) {
+  if (t.needsYou) return <span className="size-1.5 shrink-0 rounded-full bg-orange" aria-label="Needs you" role="img" />;
+  if (t.id === NEW_TAB) return <EditPencil width={12} height={12} strokeWidth={2} className="shrink-0 text-ink-3" aria-hidden />;
+  if (t.live) return <Pulse busy={t.busy} size={size} />;
+  return null;
+}
+
+const stateLabel = (t: TabInfo) => (t.needsYou ? ", needs you" : t.busy ? ", working" : t.live ? ", open" : "");
+
+/* ── desktop strip ──────────────────────────────────────── */
+
+export function TabBar({
+  tabs,
+  active,
+  onSelect,
+  onClose,
+  onNew,
+  onMove,
+}: {
+  tabs: TabInfo[];
+  active: string | null;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
+  onNew: () => void;
+  onMove: (id: string, to: number) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [fade, setFade] = useState({ left: false, right: false });
+  const [dragging, setDragging] = useState<string | null>(null);
+
+  /* fade edges only where there's more to scroll */
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => {
+      const left = el.scrollLeft > 1;
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setFade((f) => (f.left === left && f.right === right ? f : { left, right }));
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      ro.disconnect();
+    };
+  }, []);
+
+  /* keep the active tab in view */
+  useEffect(() => {
+    const el = scrollRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    el?.parentElement?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  }, [active, tabs.length]);
+
+  /* arrows move focus (manual activation: Enter/Space opens, so the composer doesn't steal focus mid-browse) */
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const list = [...(scrollRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+    const i = list.indexOf(document.activeElement as HTMLElement);
+    if (i < 0) return;
+    const go = (n: number) => {
+      e.preventDefault();
+      list[(n + list.length) % list.length]?.focus();
+    };
+    if (e.key === "ArrowRight") go(i + 1);
+    else if (e.key === "ArrowLeft") go(i - 1);
+    else if (e.key === "Home") go(0);
+    else if (e.key === "End") go(list.length - 1);
+    else if (e.key === "Delete") {
+      e.preventDefault();
+      onClose(tabs[i].id);
+      requestAnimationFrame(() => scrollRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')[Math.min(i, list.length - 2)]?.focus());
+    }
+  };
+
+  return (
+    <div
+      className="flex h-11 shrink-0 items-center border-b border-line pr-2 pl-1.5"
+      onDoubleClick={(e) => e.target === e.currentTarget && onNew()}
+    >
+      <div
+        ref={scrollRef}
+        className="tab-scroll no-scrollbar min-w-0 overflow-x-auto"
+        data-fade-left={fade.left || undefined}
+        data-fade-right={fade.right || undefined}
+        onWheel={(e) => {
+          const el = scrollRef.current;
+          if (el && Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY;
+        }}
+      >
+        <div role="tablist" aria-label="Open sessions" aria-orientation="horizontal" className="flex w-max items-center gap-1 px-0.5 py-1" onKeyDown={onKeyDown}>
+          {tabs.map((t, i) => {
+            const on = t.id === active;
+            return (
+              <div
+                key={t.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", t.id);
+                  setDragging(t.id);
+                }}
+                onDragOver={(e) => {
+                  if (!dragging) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (dragging !== t.id) onMove(dragging, i);
+                }}
+                onDrop={(e) => e.preventDefault()}
+                onDragEnd={() => setDragging(null)}
+                onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+                onAuxClick={(e) => {
+                  if (e.button !== 1) return;
+                  e.preventDefault();
+                  onClose(t.id);
+                }}
+                className={`tab-item group/tab relative flex h-7 w-44 shrink-0 items-center rounded-control pr-0.5 text-[12.5px] font-medium transition-[background-color,color,opacity] duration-100 ${
+                  on ? "bg-hover-2 text-ink" : "text-ink-2 hover:bg-hover hover:text-ink"
+                } ${dragging === t.id ? "opacity-50" : ""}`}
+                style={{ animation: "tab-in 220ms cubic-bezier(0.23,1,0.32,1) both" }}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  id={`tab-${i}`}
+                  aria-selected={on}
+                  aria-controls="session-panel"
+                  aria-label={`${t.title}${t.agent !== "claude" ? `, ${AGENT_LABEL[t.agent]}` : ""}${stateLabel(t)}`}
+                  tabIndex={on ? 0 : -1}
+                  title={t.title}
+                  onClick={() => onSelect(t.id)}
+                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-control pl-2.5 text-left focus-visible:outline-offset-[-2px]"
+                >
+                  <Indicator t={t} />
+                  <span className="min-w-0 truncate">{t.title}</span>
+                  {t.agent !== "claude" && <span className="mr-0.5 shrink-0 font-mono text-[10px] text-ink-3">{AGENT_LABEL[t.agent]}</span>}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Close ${t.title}`}
+                  title="Close (Alt+W)"
+                  tabIndex={-1}
+                  onClick={() => onClose(t.id)}
+                  className={`ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-chip text-ink-3 transition-[background-color,color,opacity] duration-100 hover:bg-hover-2 hover:text-ink ${
+                    on ? "" : "opacity-70 group-hover/tab:opacity-100"
+                  }`}
+                >
+                  <Xmark width={12} height={12} strokeWidth={2.2} aria-hidden />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <button
+        type="button"
+        aria-label="New session"
+        title="New session (Alt+T)"
+        onClick={onNew}
+        className="ml-1 flex size-7 shrink-0 items-center justify-center rounded-control text-ink-3 transition-colors duration-100 hover:bg-hover hover:text-ink"
+      >
+        <Plus width={16} height={16} strokeWidth={2} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+/* ── phone switcher ─────────────────────────────────────── */
+
+/** The browser-style tab counter for compact headers. */
+export function TabsButton({ count, attention, onClick }: { count: number; attention: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Open tabs: ${count}${attention ? ", one needs you" : ""}`}
+      aria-haspopup="dialog"
+      data-tabs-opener
+      className="relative flex size-10 shrink-0 items-center justify-center rounded-[10px] text-ink-2 hover:bg-hover hover:text-ink lg:hidden"
+    >
+      <span className="flex h-[19px] min-w-[19px] items-center justify-center rounded-[6px] border-[1.6px] border-current px-[3px] text-[10.5px] font-semibold tabular-nums leading-none">
+        {count > 99 ? "∞" : count}
+      </span>
+      {attention && <span className="absolute top-2 right-2 size-2 rounded-full bg-orange ring-2 ring-page" aria-hidden />}
+    </button>
+  );
+}
+
+export function TabSheet({
+  open,
+  tabs,
+  active,
+  onSelect,
+  onClose,
+  onNew,
+  onAllSessions,
+  onDismiss,
+}: {
+  open: boolean;
+  tabs: TabInfo[];
+  active: string | null;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
+  onNew: () => void;
+  onAllSessions: () => void;
+  onDismiss: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const panel = panelRef.current;
+    (panel?.querySelector<HTMLElement>('[aria-current="page"]') ?? panel)?.focus({ preventScroll: true });
+    panel?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest" });
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onDismiss();
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const onWide = () => desktop.matches && onDismiss();
+    window.addEventListener("keydown", onKey);
+    desktop.addEventListener("change", onWide);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      desktop.removeEventListener("change", onWide);
+      const back = opener?.isConnected ? opener : document.querySelector<HTMLElement>("[data-tabs-opener]");
+      requestAnimationFrame(() => back?.focus({ preventScroll: true }));
+    };
+  }, [open, onDismiss]);
+
+  return (
+    <div className={`fixed inset-0 z-40 lg:hidden ${open ? "" : "pointer-events-none"}`} aria-hidden={!open} role="dialog" aria-modal="true" aria-label="Open tabs">
+      <div
+        className="absolute inset-0 touch-none bg-black/50 transition-opacity duration-300"
+        style={{ opacity: open ? 1 : 0, transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
+        onClick={onDismiss}
+      />
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        inert={!open}
+        className="safe-x absolute inset-x-0 bottom-0 flex max-h-[min(78dvh,640px)] flex-col rounded-t-[14px] bg-canvas shadow-overlay outline-none"
+        style={{
+          transform: open ? "translateY(0)" : "translateY(104%)",
+          visibility: open ? "visible" : "hidden",
+          transition: `transform 300ms cubic-bezier(0.23, 1, 0.32, 1)${open ? "" : ", visibility 0s linear 300ms"}`,
+        }}
+      >
+        <div className="mx-auto mt-2 h-1 w-9 shrink-0 rounded-full bg-line-strong" aria-hidden />
+        <div className="flex h-12 shrink-0 items-center gap-2 pr-2 pl-4">
+          <h2 className="text-[14px] font-semibold tracking-[-0.01em] text-ink">Open tabs</h2>
+          <span className="text-[12.5px] tabular-nums text-ink-3">{tabs.length}</span>
+          <button
+            type="button"
+            onClick={onNew}
+            className="tap relative ml-auto flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-ink shadow-btn transition-[background-color,transform] duration-150 hover:bg-hover active:scale-[0.97]"
+          >
+            <Plus width={15} height={15} strokeWidth={2} aria-hidden />
+            New
+          </button>
+          <button type="button" onClick={onDismiss} aria-label="Close" className="flex size-10 items-center justify-center rounded-[10px] text-ink-3 hover:bg-hover hover:text-ink">
+            <Xmark width={17} height={17} strokeWidth={2} aria-hidden />
+          </button>
+        </div>
+        <ul className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
+          {tabs.map((t) => {
+            const on = t.id === active;
+            return (
+              <li key={t.id} className={`flex items-center rounded-card ${on ? "bg-hover-2" : ""}`}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(t.id)}
+                  aria-current={on ? "page" : undefined}
+                  className="flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-card py-2 pl-3 text-left focus-visible:outline-offset-[-2px]"
+                >
+                  <span className="flex w-3 shrink-0 justify-center">
+                    <Indicator t={t} size={3} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className={`min-w-0 truncate text-[15px] font-medium ${on ? "text-ink" : "text-ink-2"}`}>{t.title}</span>
+                      {t.agent !== "claude" && <AgentBadge agent={t.agent} />}
+                    </span>
+                    {(t.meta || t.needsYou) && (
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-3">
+                        {t.needsYou && <span className="shrink-0 font-medium text-orange-ink">Needs you</span>}
+                        {t.needsYou && t.meta && <span aria-hidden>·</span>}
+                        {t.meta && <span className="truncate">{t.meta}</span>}
+                      </span>
+                    )}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onClose(t.id)}
+                  aria-label={`Close ${t.title}`}
+                  className="mr-1 flex size-11 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover hover:text-ink"
+                >
+                  <Xmark width={15} height={15} strokeWidth={2} aria-hidden />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="shrink-0 border-t border-line px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <button
+            type="button"
+            onClick={onAllSessions}
+            className="flex h-11 w-full items-center gap-3 rounded-card px-3 text-left text-[14px] font-medium text-ink-2 hover:bg-hover hover:text-ink"
+          >
+            <List width={17} height={17} strokeWidth={1.8} aria-hidden />
+            All sessions
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

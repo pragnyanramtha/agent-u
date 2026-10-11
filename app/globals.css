@@ -541,37 +541,83 @@ body {
   display: none;
 }
 
-/* Assistant prose. Sized for reading on a phone first; tightened on wider screens. */
+/* ── assistant prose (components/claude/Markdown.tsx, Streamdown) ─────────
+ * Sized for reading on a phone first; tightened on wider screens. Streamdown's
+ * own shadcn styling is replaced element by element, so everything lives here. */
 .prose-claude {
   font-size: 15px;
   line-height: 1.65;
   color: var(--ink);
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 @media (min-width: 640px) {
   .prose-claude {
     font-size: 14px;
   }
 }
+.prose-claude.is-compact {
+  font-size: 13px;
+  line-height: 1.6;
+}
 .prose-claude > * + * {
   margin-top: 0.75em;
 }
-.prose-claude :is(h1, h2, h3, h4) {
-  margin-top: 1.25em;
+.prose-claude :is(li, blockquote) > * + * {
+  margin-top: 0.5em;
+}
+
+/* headings: a short, quiet scale; chat answers rarely need more than three levels */
+.prose-claude :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 1.4em;
   font-weight: 600;
   letter-spacing: -0.015em;
-  line-height: 1.35;
+  line-height: 1.3;
+  color: var(--ink);
 }
-.prose-claude h1 { font-size: 1.2em; }
-.prose-claude h2 { font-size: 1.1em; }
-.prose-claude :is(h3, h4) { font-size: 1em; }
-.prose-claude :is(ul, ol) {
-  padding-left: 1.25em;
-}
+.prose-claude h1 { font-size: 1.32em; letter-spacing: -0.02em; }
+.prose-claude h2 { font-size: 1.16em; }
+.prose-claude h3 { font-size: 1.04em; }
+.prose-claude h4 { font-size: 1em; }
+.prose-claude :is(h5, h6) { font-size: 0.93em; color: var(--ink-2); }
+.prose-claude.is-compact :is(h1, h2, h3, h4, h5, h6) { margin-top: 1em; }
+.prose-claude :is(h1, h2, h3, h4, h5, h6) + * { margin-top: 0.45em; }
+.prose-claude > :first-child { margin-top: 0; }
+
+/* lists */
+.prose-claude :is(ul, ol) { padding-left: 1.35em; }
 .prose-claude ul { list-style: disc; }
 .prose-claude ol { list-style: decimal; }
+.prose-claude ul ul { list-style: circle; }
+.prose-claude :is(ul, ol) :is(ul, ol) { margin-top: 0.3em; }
+.prose-claude li { padding-left: 0.15em; }
 .prose-claude li + li { margin-top: 0.3em; }
 .prose-claude li::marker { color: var(--ink-3); }
+.prose-claude ol > li::marker { font-variant-numeric: tabular-nums; }
+
+/* task lists: a Beautiful UI checkbox instead of the native control */
+/* GFM marks the whole list when any item is a task; only task items drop the bullet,
+ * and their box sits in the marker column so text lines up with plain items */
+.prose-claude .task-list-item { list-style: none; }
+.prose-claude .task-list-item input[type="checkbox"] {
+  appearance: none;
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  margin: 0 0.45em 0 -1.35em;
+  vertical-align: -0.14em;
+  border-radius: 4px;
+  background: var(--surface) center / 75% no-repeat;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.prose-claude .task-list-item input[type="checkbox"]:checked {
+  background-color: var(--accent-solid);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.2 5 8.5l4.5-5'/%3E%3C/svg%3E");
+  box-shadow: none;
+}
+.prose-claude .task-list-item:has(> input:checked, > p > input:checked) { color: var(--ink-2); }
+
+/* inline */
 .prose-claude a {
   color: var(--accent-ink);
   text-decoration: underline;
@@ -579,39 +625,146 @@ body {
   text-underline-offset: 2px;
 }
 .prose-claude a:hover { text-decoration-color: currentColor; }
+/* relative links (repo paths) can't open in the browser: shown as text, path on hover */
+.prose-claude .md-deadlink { color: var(--ink); font-weight: 500; }
 .prose-claude strong { font-weight: 600; }
-.prose-claude blockquote {
-  border-left: 2px solid var(--line-strong);
-  padding-left: 0.9em;
-  color: var(--ink-2);
-}
-.prose-claude hr {
-  border: 0;
-  border-top: 1px solid var(--line);
-}
-.prose-claude :not(pre) > code {
+.prose-claude del { color: var(--ink-3); }
+.prose-claude code.md-code {
   border-radius: 5px;
   background: var(--inset);
   box-shadow: var(--shadow-hairline);
   padding: 0.08em 0.35em;
   font-family: var(--font-mono);
   font-size: 0.86em;
+  /* chips wrap like text; each line fragment keeps its own rounded edge */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
-.prose-claude table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.93em;
-  font-variant-numeric: tabular-nums;
+.prose-claude a code.md-code { color: inherit; }
+.prose-claude .md-img {
+  display: inline-block;
+  max-width: 100%;
+  max-height: 24rem;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-hairline);
 }
-.prose-claude th {
-  text-align: left;
-  font-weight: 600;
+
+/* blocks */
+.prose-claude blockquote {
+  border-left: 2px solid var(--line-strong);
+  padding: 0.05em 0 0.05em 0.9em;
   color: var(--ink-2);
 }
-.prose-claude :is(th, td) {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
+.prose-claude hr {
+  margin-top: 1.25em;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.prose-claude hr + * { margin-top: 1.25em; }
+
+/* footnotes */
+.prose-claude sup { font-size: 0.75em; line-height: 0; }
+.prose-claude [data-footnote-ref] { padding: 0 0.1em; text-decoration: none; font-variant-numeric: tabular-nums; }
+.prose-claude [data-footnote-ref]::before { content: "["; }
+.prose-claude [data-footnote-ref]::after { content: "]"; }
+.prose-claude [data-footnotes] {
+  margin-top: 1.25em;
+  padding-top: 0.75em;
+  border-top: 1px solid var(--line);
+  font-size: 0.88em;
+  color: var(--ink-2);
+}
+.prose-claude [data-footnotes] > h2 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.prose-claude [data-footnotes] > ol { margin-top: 0; }
+.prose-claude [data-footnote-backref] { text-decoration: none; }
+
+/* math: KaTeX MathML output, no stylesheet needed */
+.prose-claude .katex-display {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.3em 0;
+  text-align: center;
+}
+.prose-claude math { font-size: 1.08em; }
+
+/* tables: a hairline card with a sticky header, compact tabular text,
+ * numeric columns right-aligned, sideways scroll instead of squeezed columns */
+.prose-claude .md-table {
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.prose-claude .md-table-scroll {
+  max-width: 100%;
+  max-height: 32rem;
+  overflow: auto;
+  overscroll-behavior-x: contain;
+  border-radius: inherit;
+}
+.prose-claude .md-table table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  /* `anywhere` (inherited) shrinks min-content widths and squeezes cells to one
+   * character per line; break-word only breaks a word that can't fit at all */
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+@media (min-width: 640px) {
+  .prose-claude .md-table table { font-size: 13px; }
+}
+.prose-claude.is-compact .md-table table { font-size: 12px; }
+.prose-claude .md-table :is(th, td) {
+  padding: 7px 12px;
+  text-align: left;
   vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+/* prose columns keep a readable measure; on narrow screens the table scrolls instead */
+.prose-claude .md-table :is(th, td):not([data-short]) { min-width: 11rem; }
+.prose-claude .md-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--inset);
+  color: var(--ink-2);
+  font-size: 0.96em;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.prose-claude .md-table tbody tr:last-child td { border-bottom: 0; }
+.prose-claude .md-table tbody tr:hover td { background: color-mix(in srgb, var(--hover) 70%, transparent); }
+.prose-claude .md-table [data-short] { white-space: nowrap; }
+.prose-claude .md-table [data-num] { text-align: right; white-space: nowrap; }
+.prose-claude .md-table code.md-code { font-size: 0.92em; }
+
+/* streaming caret, drawn after the last block of text still arriving */
+.prose-claude.is-streaming:empty::after,
+.prose-claude.is-streaming > :is(p, h1, h2, h3, h4, h5, h6):last-child::after,
+.prose-claude.is-streaming > blockquote:last-child > :last-child::after,
+.prose-claude.is-streaming > :is(ul, ol):last-child > li:last-child::after {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 1.5px;
+  translate: 0 -0.5px;
+  border-radius: 1px;
+  background: var(--ink);
+  vertical-align: text-bottom;
+  content: "";
 }
 
 * {
@@ -631,4 +784,32 @@ a,
 [role="button"],
 label {
   touch-action: manipulation;
+}
+
+/* ── tabs: harness-style tab strip ─────────────────────── */
+
+/* The strip fades out at whichever edge still has tabs to scroll to. */
+.tab-scroll {
+  --tab-fade-l: 0px;
+  --tab-fade-r: 0px;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--tab-fade-l), #000 calc(100% - var(--tab-fade-r)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--tab-fade-l), #000 calc(100% - var(--tab-fade-r)), transparent 100%);
+  scroll-padding-inline: 28px;
+}
+.tab-scroll[data-fade-left] {
+  --tab-fade-l: 28px;
+}
+.tab-scroll[data-fade-right] {
+  --tab-fade-r: 28px;
+}
+
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }

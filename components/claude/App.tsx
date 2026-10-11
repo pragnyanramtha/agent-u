@@ -1,19 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSessions } from "@/lib/client/useSessions";
 import { CommandPalette, OPEN_TERMINAL_EVENT } from "./CommandPalette";
 import { WebTerminal, type TerminalTarget } from "./WebTerminal";
 import { NewSession } from "./NewSession";
 import { SessionList } from "./SessionList";
 import { SessionScreen } from "./SessionScreen";
+import { describeTab, TabBar, TabSheet, TabsButton } from "./TabBar";
+import { NEW_TAB, useTabs } from "./useTabs";
 
-const readId = () => new URLSearchParams(window.location.search).get("s");
+const isEditable = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.isContentEditable || t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && !["checkbox", "radio", "button"].includes((t as HTMLInputElement).type)));
 
 export function App() {
-  const [id, setId] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
+  const { ready, active, tabs: openTabs, open, newTab: openNewTab, close, reopen, replace, move, cycle, select, syncTitles } = useTabs();
   const [drawer, setDrawer] = useState(false);
+  const [sheet, setSheet] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   /* the sidebar's theme pill reads the theme once on mount; remount it after the palette flips the theme */
   const [themeKey, setThemeKey] = useState(0);
@@ -26,25 +29,65 @@ export function App() {
     return () => window.removeEventListener(OPEN_TERMINAL_EVENT, open);
   }, []);
 
+  const byId = useMemo(() => new Map((sessions ?? []).map((s) => [s.id, s])), [sessions]);
   useEffect(() => {
-    setId(readId());
-    setReady(true);
-    const onPop = () => setId(readId());
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
+    if (sessions) syncTitles((id) => byId.get(id)?.title);
+  }, [sessions, byId, syncTitles]);
+  const infos = useMemo(() => openTabs.map((t) => describeTab(t, byId.get(t.id), sessions !== null)), [openTabs, byId, sessions]);
+  const sessionId = active && active !== NEW_TAB ? active : null;
 
-  const go = useCallback(
-    (next: string | null, replace = false) => {
-      const url = next ? `/?s=${next}` : "/";
-      if (replace) window.history.replaceState(null, "", url);
-      else window.history.pushState(null, "", url);
-      setId(next);
+  useEffect(() => {
+    if (active === NEW_TAB) document.title = "New session · agent-u";
+  }, [active]);
+
+  const openSession = useCallback(
+    (id: string) => {
+      open(id);
       setDrawer(false);
+      setSheet(false);
       void refresh();
     },
-    [refresh],
+    [open, refresh],
   );
+  const newTab = useCallback(() => {
+    openNewTab();
+    setDrawer(false);
+    setSheet(false);
+  }, [openNewTab]);
+
+  /* Tab shortcuts. Ctrl+Tab when the browser lets it through; Alt+arrows, Alt+1..9,
+   * Alt+T (Alt+Shift+T reopens) and Alt+W otherwise, so the browser's own Ctrl+T/W keep working.
+   * On a Mac, Option+arrows in a text field stay word jumps. */
+  useEffect(() => {
+    const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || drawer || sheet) return;
+      if (e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Tab") {
+        e.preventDefault();
+        cycle(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && !e.shiftKey) {
+        if (mac && isEditable(e.target)) return;
+        e.preventDefault();
+        cycle(e.key === "ArrowRight" ? 1 : -1);
+      } else if (e.code === "KeyT") {
+        e.preventDefault();
+        if (e.shiftKey) reopen();
+        else newTab();
+      } else if (e.code === "KeyW" && !e.shiftKey) {
+        e.preventDefault();
+        if (active) close(active);
+      } else if (/^Digit[1-9]$/.test(e.code) && !e.shiftKey) {
+        e.preventDefault();
+        const n = Number(e.code.slice(5));
+        select(n === 9 ? -1 : n - 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cycle, reopen, close, select, active, newTab, drawer, sheet]);
 
   /* Drawer: focus moves in on open and back to the menu button on close,
    * Escape closes, the page behind can't scroll, and it closes itself if the
@@ -73,11 +116,18 @@ export function App() {
     };
   }, [drawer]);
 
-  const list = <SessionList key={themeKey} sessions={sessions} activeId={id} onPick={(s) => go(s)} onNew={() => go(null)} error={error} />;
+  const dismissSheet = useCallback(() => setSheet(false), []);
+  const list = (
+    <SessionList key={themeKey} sessions={sessions} activeId={sessionId} openIds={openTabs} onPick={openSession} onNew={newTab} error={error} />
+  );
+  const tabsButton = (
+    <TabsButton count={infos.length} attention={infos.some((t) => t.needsYou && t.id !== active)} onClick={() => setSheet(true)} />
+  );
+  const activeIndex = openTabs.findIndex((t) => t.id === active);
 
   return (
-    <main className="flex h-[100dvh] bg-canvas text-ink lg:gap-2.5 lg:p-2.5">
-      <aside className="hidden w-[288px] shrink-0 lg:flex">{list}</aside>
+    <main className="flex h-[100dvh] bg-canvas text-ink lg:gap-2.5 lg:p-2.5 lg:pl-0">
+      <aside className="hidden w-[264px] shrink-0 lg:flex">{list}</aside>
 
       <div
         className={`fixed inset-0 z-40 lg:hidden ${drawer ? "" : "pointer-events-none"}`}
@@ -107,16 +157,48 @@ export function App() {
         </div>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-page lg:rounded-[14px] lg:border lg:border-line" inert={drawer}>
-        {!ready ? null : id ? (
-          <SessionScreen key={id} id={id} onMenu={() => setDrawer(true)} onNavigate={(next) => go(next, true)} onNew={() => go(null)} />
-        ) : (
-          <NewSession projects={projects} sessions={sessions} onMenu={() => setDrawer(true)} onOpen={(s) => go(s)} />
+      <TabSheet
+        open={sheet}
+        tabs={infos}
+        active={active}
+        onSelect={(id) => {
+          open(id);
+          setSheet(false);
+        }}
+        onClose={close}
+        onNew={newTab}
+        onAllSessions={() => {
+          setSheet(false);
+          setDrawer(true);
+        }}
+        onDismiss={dismissSheet}
+      />
+
+      {/* the window: on desktop a rounded pane whose title bar is the tab strip */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-page lg:rounded-window lg:border lg:border-line" inert={drawer || sheet}>
+        {ready && (
+          <div className="hidden lg:block">
+            <TabBar tabs={infos} active={active} onSelect={open} onClose={close} onNew={newTab} onMove={move} />
+          </div>
         )}
+        <div id="session-panel" role="tabpanel" aria-labelledby={activeIndex >= 0 ? `tab-${activeIndex}` : undefined} className="flex min-h-0 flex-1 flex-col">
+          {!ready ? null : sessionId ? (
+            <SessionScreen
+              key={sessionId}
+              id={sessionId}
+              onMenu={() => setDrawer(true)}
+              onNavigate={(next) => replace(sessionId, next)}
+              onNew={newTab}
+              extra={tabsButton}
+            />
+          ) : (
+            <NewSession projects={projects} sessions={sessions} onMenu={() => setDrawer(true)} onOpen={openSession} extra={tabsButton} />
+          )}
+        </div>
       </div>
 
       {terminal && <WebTerminal target={terminal} onClose={() => setTerminal(null)} />}
-      <CommandPalette sessions={sessions} activeId={id} onOpen={(s) => go(s)} onNew={() => go(null)} onTheme={onTheme} />
+      <CommandPalette sessions={sessions} activeId={sessionId} onOpen={openSession} onNew={newTab} onTheme={onTheme} />
     </main>
   );
 }
