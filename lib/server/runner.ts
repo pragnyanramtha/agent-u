@@ -1,0 +1,321 @@
+import { randomUUID } from "node:crypto";
+import { query, type CanUseTool, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { PendingAsk, PermissionMode, Question, RunState, StreamDelta } from "@/lib/types";
+import { CLAUDE_BIN, IDLE_REAP_MS } from "./config";
+
+/* A web run drives one `claude` process through the Agent SDK in streaming
+ * input mode, so a session can take many messages without respawning. The
+ * transcript file stays the source of truth for history; a run only adds what
+ * the file can't carry: token deltas, status, and pending approvals. */
+
+export type RunEvent =
+  | { type: "delta"; delta: StreamDelta }
+  | { type: "run"; run: RunState }
+  | { type: "redirect"; sessionId: string };
+
+type Decision = { allow: boolean; always?: boolean; answers?: Record<string, string>; message?: string };
+
+/** Older CLIs don't send a prompt sentence with permission asks; write one in the same voice. */
+function askTitle(toolName: string, input: Record<string, unknown>, displayName?: string) {
+  const file = typeof input.file_path === "string" ? input.file_path.split("/").pop() : null;
+  if ((toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit") && file) return `Let Claude edit ${file}?`;
+  if (toolName === "Bash") return "Let Claude run this command?";
+  if (toolName === "WebFetch") return "Let Claude fetch this page?";
+  return `Let Claude use ${displayName ?? toolName}?`;
+}
+
+class Inbox implements AsyncIterable<SDKUserMessage> {
+  private queue: SDKUserMessage[] = [];
+  private wake: (() => void) | null = null;
+  private done = false;
+
+  push(message: SDKUserMessage) {
+    this.queue.push(message);
+    this.wake?.();
+  }
+
+  end() {
+    this.done = true;
+    this.wake?.();
+  }
+
+  async *[Symbol.asyncIterator]() {
+    for (;;) {
+      while (this.queue.length) yield this.queue.shift()!;
+      if (this.done) return;
+      await new Promise<void>((resolve) => (this.wake = resolve));
+      this.wake = null;
+    }
+  }
+}
+
+export class Run {
+  readonly state: RunState;
+  private q: Query;
+  private inbox = new Inbox();
+  private listeners = new Set<(e: RunEvent) => void>();
+  private decisions = new Map<string, { resolve: (d: Decision) => void; ask: PendingAsk; input: Record<string, unknown>; suggestions?: unknown[] }>();
+  private blockKinds = new Map<number, "text" | "thinking">();
+  private msgId = "";
+  private reaper: NodeJS.Timeout | null = null;
+  private ready: Promise<string>;
+  private markReady!: (id: string) => void;
+  private initialized = false;
+  private ended = false;
+
+  readonly cwd: string;
+
+  constructor(opts: { resume?: string; fork?: boolean; cwd: string; model?: string; permissionMode: PermissionMode }) {
+    this.cwd = opts.cwd;
+    this.state = {
+      status: "starting",
+      model: opts.model ?? null,
+      permissionMode: opts.permissionMode,
+      slashCommands: [],
+      pending: [],
+      error: null,
+      costUsd: null,
+      sessionId: opts.resume ?? "",
+    };
+    this.ready = new Promise((resolve) => (this.markReady = resolve));
+    this.q = query({
+      prompt: this.inbox,
+      options: {
+        cwd: opts.cwd,
+        resume: opts.resume,
+        forkSession: opts.fork,
+        model: opts.model,
+        permissionMode: opts.permissionMode,
+        allowDangerouslySkipPermissions: true,
+        includePartialMessages: true,
+        settingSources: ["user", "project", "local"],
+        systemPrompt: { type: "preset", preset: "claude_code" },
+        pathToClaudeCodeExecutable: CLAUDE_BIN,
+        canUseTool: this.canUseTool,
+        stderr: (data) => process.stderr.write(`[claude ${this.state.sessionId.slice(0, 8)}] ${data}`),
+      },
+    });
+    void this.loop();
+  }
+
+  /** Resolves with the session id once the CLI reports it (new sessions and forks get a fresh one), or "" if it ended first. */
+  sessionId() {
+    return this.ready;
+  }
+
+  get live() {
+    return !this.ended;
+  }
+
+  send(text: string) {
+    if (this.ended) return;
+    this.inbox.push({
+      type: "user",
+      message: { role: "user", content: text },
+      parent_tool_use_id: null,
+    } as SDKUserMessage);
+    this.update({ status: "running", error: null });
+  }
+
+  subscribe(fn: (e: RunEvent) => void) {
+    this.listeners.add(fn);
+    this.scheduleReap();
+    return () => {
+      this.listeners.delete(fn);
+      this.scheduleReap();
+    };
+  }
+
+  respond(requestId: string, decision: Decision) {
+    const waiting = this.decisions.get(requestId);
+    if (!waiting) return false;
+    waiting.resolve(decision);
+    return true;
+  }
+
+  async interrupt() {
+    await this.q.interrupt().catch(() => undefined);
+  }
+
+  async setPermissionMode(mode: PermissionMode) {
+    await this.q.setPermissionMode(mode);
+    this.update({ permissionMode: mode });
+  }
+
+  async setModel(model: string | undefined) {
+    await this.q.setModel(model);
+    this.update({ model: model ?? null });
+  }
+
+  close() {
+    this.end({ status: "closed" });
+  }
+
+  /** Runs once, whichever comes first: close(), the process exiting, or the SDK throwing. */
+  private end(patch: Partial<RunState>) {
+    if (this.ended) return;
+    this.ended = true;
+    if (registry().get(this.state.sessionId) === this) registry().delete(this.state.sessionId);
+    this.inbox.end();
+    this.decisions.forEach(({ resolve }) => resolve({ allow: false, message: "Session closed" }));
+    try {
+      this.q.close();
+    } catch {
+      /* already gone */
+    }
+    this.update(patch);
+    this.markReady(this.initialized ? this.state.sessionId : "");
+  }
+
+  private emit(e: RunEvent) {
+    this.listeners.forEach((fn) => fn(e));
+  }
+
+  private update(patch: Partial<RunState>) {
+    Object.assign(this.state, patch);
+    this.emit({ type: "run", run: { ...this.state, pending: [...this.state.pending] } });
+    this.scheduleReap();
+  }
+
+  /* Idle runs with nobody watching are shut down; the next message resumes the session. */
+  private scheduleReap() {
+    if (this.reaper) clearTimeout(this.reaper);
+    this.reaper = null;
+    if (this.ended || this.listeners.size > 0) return;
+    this.reaper = setTimeout(() => {
+      if (this.state.status !== "running" && this.state.pending.length === 0 && this.listeners.size === 0) this.close();
+      else this.scheduleReap();
+    }, IDLE_REAP_MS);
+  }
+
+  private canUseTool: CanUseTool = (toolName, input, options) =>
+    new Promise<PermissionResult>((resolve) => {
+      if (this.ended || options.signal.aborted) return resolve({ behavior: "deny", message: "Cancelled" });
+      const requestId = randomUUID();
+      const ask: PendingAsk =
+        toolName === "AskUserQuestion"
+          ? { kind: "question", requestId, questions: (input.questions as Question[]) ?? [] }
+          : {
+              kind: "permission",
+              requestId,
+              toolName,
+              title: options.title ?? askTitle(toolName, input, options.displayName),
+              description: options.description ?? (options.decisionReason?.includes(" ") ? options.decisionReason : null),
+              input,
+              canAlwaysAllow: !options.suppressAlwaysAllowRule && Boolean(options.suggestions?.length),
+            };
+      const finish = (result: PermissionResult) => {
+        if (!this.decisions.delete(requestId)) return;
+        this.update({ pending: this.state.pending.filter((p) => p.requestId !== requestId) });
+        resolve(result);
+      };
+      this.decisions.set(requestId, {
+        ask,
+        input,
+        suggestions: options.suggestions,
+        resolve: (d) => {
+          if (!d.allow) return finish({ behavior: "deny", message: d.message ?? "The user declined this from the web UI." });
+          if (ask.kind === "question") return finish({ behavior: "allow", updatedInput: { ...input, answers: d.answers ?? {} } });
+          finish({ behavior: "allow", updatedInput: input, updatedPermissions: d.always ? options.suggestions : undefined });
+        },
+      });
+      options.signal.addEventListener("abort", () => finish({ behavior: "deny", message: "Cancelled" }), { once: true });
+      this.update({ pending: [...this.state.pending, ask] });
+    });
+
+  private rekey(id: string) {
+    const previous = this.state.sessionId;
+    if (previous === id) return;
+    /* a fork starts out labelled with its source id but was never registered under it */
+    if (previous && registry().get(previous) === this) registry().delete(previous);
+    /* never leave two live processes writing one transcript */
+    const clash = registry().get(id);
+    if (clash && clash !== this) clash.close();
+    this.state.sessionId = id;
+    if (previous) this.emit({ type: "redirect", sessionId: id });
+    register(id, this);
+  }
+
+  private handle(m: SDKMessage) {
+    if (this.ended) return;
+    if (m.type === "system" && m.subtype === "init") {
+      this.initialized = true;
+      this.rekey(m.session_id);
+      const hidden = new Set(m.terminal_slash_commands ?? []);
+      this.update({
+        model: m.model,
+        permissionMode: (["default", "acceptEdits", "bypassPermissions", "plan"].includes(m.permissionMode) ? m.permissionMode : this.state.permissionMode) as PermissionMode,
+        slashCommands: m.slash_commands.filter((c) => !hidden.has(c)),
+      });
+      this.markReady(m.session_id);
+      return;
+    }
+    if (m.type === "system" && m.subtype === "session_state_changed") {
+      this.update({ status: m.state === "idle" ? "idle" : "running" });
+      return;
+    }
+    if (m.type === "stream_event" && !m.parent_tool_use_id) {
+      const ev = m.event;
+      if (ev.type === "message_start") {
+        this.msgId = ev.message.id;
+        this.blockKinds.clear();
+      } else if (ev.type === "content_block_start") {
+        if (ev.content_block.type === "text" || ev.content_block.type === "thinking") this.blockKinds.set(ev.index, ev.content_block.type);
+      } else if (ev.type === "content_block_delta") {
+        const kind = this.blockKinds.get(ev.index);
+        const text = ev.delta.type === "text_delta" ? ev.delta.text : ev.delta.type === "thinking_delta" ? ev.delta.thinking : "";
+        if (kind && text) this.emit({ type: "delta", delta: { msgId: this.msgId, index: ev.index, kind, text } });
+      }
+      return;
+    }
+    if (m.type === "result") {
+      this.update({
+        status: "idle",
+        costUsd: m.total_cost_usd ?? this.state.costUsd,
+        error: !m.is_error ? null : m.subtype === "success" ? m.result.slice(0, 300) || "The turn failed." : `Run ended: ${m.subtype.replace(/_/g, " ")}`,
+      });
+    }
+  }
+
+  private async loop() {
+    try {
+      for await (const m of this.q) this.handle(m);
+      this.end(this.initialized ? { status: "closed" } : { status: "error", error: this.state.error ?? "Claude exited before it started." });
+    } catch (err) {
+      this.end({ status: "error", error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+}
+
+const g = globalThis as typeof globalThis & { __claudeUiRuns?: Map<string, Run>; __claudeUiRunWatchers?: Set<(id: string) => void> };
+const registry = () => (g.__claudeUiRuns ??= new Map());
+const watchers = () => (g.__claudeUiRunWatchers ??= new Set());
+
+function register(id: string, run: Run) {
+  registry().set(id, run);
+  watchers().forEach((fn) => fn(id));
+}
+
+/** Called whenever a run takes over a session id, so viewers attach before a fast failure is over. */
+export function onRunRegistered(fn: (id: string) => void) {
+  watchers().add(fn);
+  return () => void watchers().delete(fn);
+}
+
+/** Only live runs: one that closed or failed is gone, and the next message starts a fresh one. */
+export const getRun = (id: string) => {
+  const run = registry().get(id);
+  return run?.live ? run : null;
+};
+
+export const activeRuns = () => [...registry().values()].filter((r) => r.live);
+
+export function startRun(opts: ConstructorParameters<typeof Run>[0]) {
+  const run = new Run(opts);
+  /* forks are aliased under the source id until init re-keys them, so viewers of the source get the redirect */
+  if (opts.resume) {
+    getRun(opts.resume)?.close();
+    register(opts.resume, run);
+  }
+  return run;
+}

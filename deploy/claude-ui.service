@@ -1,0 +1,16 @@
+[Unit]
+Description=claude-ui web app (Next.js)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/claude-ui
+Environment=NODE_ENV=production
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node %h/claude-ui/node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3311
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+KillMode=mixed
+
+[Install]
+WantedBy=default.target

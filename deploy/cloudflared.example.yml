@@ -1,0 +1,12 @@
+# ~/.cloudflared/claude-ui.yml on the server. Replace <TUNNEL_ID> and claude.example.com.
+tunnel: <TUNNEL_ID>
+credentials-file: /home/<user>/.cloudflared/<TUNNEL_ID>.json
+no-autoupdate: true
+ingress:
+  # the web terminal's WebSocket backend
+  - hostname: claude.example.com
+    path: ^/pty
+    service: http://127.0.0.1:3312
+  - hostname: claude.example.com
+    service: http://127.0.0.1:3311
+  - service: http_status:404

@@ -1,0 +1,145 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+/* Types into the terminal a session is already open in, by writing keys into
+ * its multiplexer pane: zellij `write-chars`, tmux `send-keys`. The pane is
+ * found in the process environment, checked up the parent chain because a
+ * wrapped claude can lose its own env. Before typing, the pane is read to make
+ * sure Claude's own prompt is focused and empty, so text never lands in a
+ * dialog, another agent's prompt, or half-typed input. */
+
+function envOf(raw: string | null, key: string) {
+  const m = new RegExp(`(?:^|\0)${key}=([^\0]*)`).exec(raw ?? "");
+  return m?.[1] || null;
+}
+
+const procPpid = async (pid: number) => {
+  const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8").catch(() => null);
+  return stat ? Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]) : 0;
+};
+
+export type InputTarget = { kind: "zellij"; session: string; pane: string } | { kind: "tmux"; pane: string };
+
+export async function inputTarget(pid: number): Promise<InputTarget | null> {
+  for (let depth = 0; depth < 6 && pid > 1; depth++) {
+    const env = await fs.readFile(`/proc/${pid}/environ`, "utf8").catch(() => null);
+    const zellij = envOf(env, "ZELLIJ_SESSION_NAME");
+    const zellijPane = envOf(env, "ZELLIJ_PANE_ID");
+    if (zellij && zellijPane !== null) return { kind: "zellij", session: zellij, pane: `terminal_${zellijPane}` };
+    const tmuxPane = envOf(env, "TMUX_PANE");
+    if (tmuxPane) return { kind: "tmux", pane: tmuxPane };
+    pid = await procPpid(pid);
+  }
+  return null;
+}
+
+const run = (cmd: string, args: string[]) => execFileAsync(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 }).then((r) => r.stdout);
+
+/** The visible screen of the pane; `ansi` keeps styling (needed to tell dim placeholders from typed text). */
+export async function paneScreen(target: InputTarget, ansi = false) {
+  return target.kind === "zellij"
+    ? run("zellij", ["--session", target.session, "action", "dump-screen", "-p", target.pane, ...(ansi ? ["-a"] : [])])
+    : run("tmux", ["capture-pane", "-p", ...(ansi ? ["-e"] : []), "-t", target.pane]);
+}
+
+const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
+const RULE = /^─{12,}/;
+const PLACEHOLDER = /^(Try ".*"|Message @[\w.-]+…?)$/;
+
+export type PromptState =
+  | { ok: true }
+  | { ok: false; code: "agent_focus"; agent: string }
+  | { ok: false; code: "has_text"; text: string }
+  | { ok: false; code: "no_prompt"; screen: string };
+
+/**
+ * Finds Claude Code's input box: the last line starting with "❯" that sits
+ * between two horizontal rules. The upper rule carries "@name" when the
+ * terminal is focused on another agent; typed text is not dim, placeholders are.
+ */
+export function readPrompt(ansiScreen: string): PromptState {
+  const raw = ansiScreen.split("\n");
+  const plain = raw.map((l) => l.replace(ANSI, ""));
+  for (let i = plain.length - 1; i > 0; i--) {
+    if (!plain[i].trimStart().startsWith("❯")) continue;
+    if (!RULE.test(plain[i - 1].trim()) || !plain.slice(i + 1, i + 4).some((l) => RULE.test(l.trim()))) continue;
+    const agent = /@([\w.-]+)\s*─*\s*$/.exec(plain[i - 1].trim())?.[1];
+    if (agent) return { ok: false, code: "agent_focus", agent };
+    const typed = raw[i]
+      .split(/(?=\u001b\[)/)
+      .filter((part) => !/\u001b\[[0-9;]*\b2m/.test(part))
+      .join("")
+      .replace(ANSI, "")
+      .replace(/^\s*❯\s?/, "")
+      .trim();
+    /* Claude's idle suggestion ('Try "…"') isn't always styled dim in the dump; it's never real input */
+    return typed && !PLACEHOLDER.test(typed) ? { ok: false, code: "has_text", text: typed } : { ok: true };
+  }
+  return { ok: false, code: "no_prompt", screen: plain.filter((l) => l.trim()).slice(-8).join("\n") };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function keys(target: InputTarget, line: string) {
+  if (target.kind === "zellij") {
+    if (line) await run("zellij", ["--session", target.session, "action", "write-chars", "-p", target.pane, line]);
+    await run("zellij", ["--session", target.session, "action", "write", "-p", target.pane, "13"]);
+  } else {
+    if (line) await run("tmux", ["send-keys", "-t", target.pane, "-l", "--", line]);
+    await run("tmux", ["send-keys", "-t", target.pane, "Enter"]);
+  }
+}
+
+export class InputRefused extends Error {
+  readonly code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+/**
+ * Types the text and presses Return, after checking the prompt is focused and
+ * empty. Reports whether it looks queued (Claude busy) rather than taken.
+ * Newlines become spaces: a real Enter submits in Claude's prompt.
+ */
+export async function typeIntoTerminal(target: InputTarget, text: string) {
+  const before = readPrompt(await paneScreen(target, true));
+  if (!before.ok) {
+    if (before.code === "agent_focus") throw new InputRefused(`The terminal is focused on agent @${before.agent}, not this session. Switch it back to main in the terminal first.`, before.code);
+    if (before.code === "has_text") throw new InputRefused(`The terminal's prompt already has text in it ("${before.text.slice(0, 60)}"). Send or clear it in the terminal first.`, before.code);
+    throw new InputRefused("The terminal isn't showing Claude's prompt right now (a dialog or menu may be open). Check the terminal view.", before.code);
+  }
+  await keys(target, text.replace(/[\r\n]+/g, " "));
+  /* a busy Claude keeps a submitted message in its prompt area as queued, so text still showing isn't a failure */
+  for (let i = 0; i < 4; i++) {
+    await sleep(250);
+    const after = readPrompt(await paneScreen(target, true));
+    if (after.ok || after.code !== "has_text") return { queued: false };
+  }
+  return { queued: true };
+}
+
+/* Single keys the web may press in a terminal pane: answering dialogs, interrupting, cycling mode. */
+const KEYS = {
+  Escape: { zellij: ["27"], tmux: "Escape" },
+  Enter: { zellij: ["13"], tmux: "Enter" },
+  Up: { zellij: ["27", "91", "65"], tmux: "Up" },
+  Down: { zellij: ["27", "91", "66"], tmux: "Down" },
+  ShiftTab: { zellij: ["27", "91", "90"], tmux: "BTab" },
+  "1": { zellij: ["49"], tmux: "1" },
+  "2": { zellij: ["50"], tmux: "2" },
+  "3": { zellij: ["51"], tmux: "3" },
+} as const;
+
+export type TerminalKey = keyof typeof KEYS;
+export const isTerminalKey = (k: unknown): k is TerminalKey => typeof k === "string" && k in KEYS;
+
+export async function pressKey(target: InputTarget, key: TerminalKey) {
+  const k = KEYS[key];
+  if (target.kind === "zellij") await run("zellij", ["--session", target.session, "action", "write", "-p", target.pane, ...k.zellij]);
+  else await run("tmux", ["send-keys", "-t", target.pane, k.tmux]);
+}

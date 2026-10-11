@@ -1,0 +1,11 @@
+[Unit]
+Description=Cloudflare tunnel for claude-ui
+After=network-online.target claude-ui.service
+
+[Service]
+ExecStart=/usr/bin/cloudflared tunnel --config %h/.cloudflared/claude-ui.yml run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

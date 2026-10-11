@@ -1,0 +1,27 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { parseMode, readJson, str } from "@/lib/server/http";
+import { getRun } from "@/lib/server/runner";
+
+export const dynamic = "force-dynamic";
+
+/** Interrupt the current turn, switch permission mode or model, or shut the web run down. */
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const body = await readJson(req);
+  const run = getRun(id);
+  if (!run) return NextResponse.json({ error: "No web run for this session." }, { status: 404 });
+
+  try {
+    if (body.action === "interrupt") await run.interrupt();
+    else if (body.action === "stop") run.close();
+    else if (body.action === "mode") {
+      const mode = parseMode(body.value);
+      if (!mode) return NextResponse.json({ error: "Unknown permission mode." }, { status: 400 });
+      await run.setPermissionMode(mode);
+    } else if (body.action === "model") await run.setModel(str(body.value) || undefined);
+    else return NextResponse.json({ error: "Unknown action." }, { status: 400 });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+  return NextResponse.json({ ok: true });
+}
