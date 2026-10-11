@@ -29,7 +29,9 @@ Requirements on the server: Node 22+ (24 recommended), pnpm, python3 (web termin
    `cloudflared tunnel create $TUNNEL_NAME`, `cloudflared tunnel route dns $TUNNEL_NAME $PUBLIC_HOSTNAME`, copy the credentials
    JSON to the server's `~/.cloudflared/`, write `~/.cloudflared/agent-u.yml` from `deploy/cloudflared.example.yml`
    (routes `^/pty` to the terminal backend, everything else to the app), and enable `deploy/agent-u-tunnel.service`.
-4. Agent logins happen on the server in a terminal (or the web terminal): `claude` (login), `codex login`,
+4. Codex sandbox on Ubuntu 24.04+: install `deploy/apparmor-codex-bwrap` as `/etc/apparmor.d/codex-bwrap` (fill in the user)
+   and `sudo apparmor_parser -r` it, otherwise workspace-write mode fails with bwrap uid-map/loopback errors.
+5. Agent logins happen on the server in a terminal (or the web terminal): `claude` (login), `codex login`,
    `opencode auth login`, `cursor-agent login`, `devin` login.
 
 ## Security model

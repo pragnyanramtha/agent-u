@@ -1,0 +1,13 @@
+# /etc/apparmor.d/codex-bwrap. Ubuntu 24.04+ restricts unprivileged user namespaces
+# (kernel.apparmor_restrict_unprivileged_userns=1), which breaks the bwrap sandbox Codex
+# bundles ("bwrap: setting up uid map: Permission denied" / "loopback: Failed RTM_NEWADDR").
+# This lets only that bwrap create user namespaces, mirroring Ubuntu's chrome profile.
+# Replace <user>, then: sudo apparmor_parser -r /etc/apparmor.d/codex-bwrap
+abi <abi/4.0>,
+include <tunables/global>
+
+profile codex-bwrap /home/<user>/.codex/packages/standalone/releases/*/codex-resources/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/codex-bwrap>
+}
