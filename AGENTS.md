@@ -12,8 +12,8 @@ Watch live sessions, type into the terminal they run in, start/resume sessions f
 
 ## Configuration
 All machine-specific values live in gitignored env files; `.env.example` documents every key.
-- `.env.local` on the server (chmod 600): `UI_PASSWORD_HASH` (`scrypt:salt:hash`, colon-separated because Next's dotenv
-  expands `$`), `UI_SECRET` (32+ chars, signs the session cookie), optional `CLAUDE_BIN`, `CLAUDE_HOME`, `HIDE_PROJECTS`,
+- `.env.local` on the server (chmod 600): `UI_PASSWORD` (plain) or `UI_PASSWORD_HASH` (`scrypt:salt:hash`, colon-separated
+  because Next's dotenv expands `$`; wins if both are set), `UI_SECRET` (32+ chars, signs the session cookie), optional `CLAUDE_BIN`, `CLAUDE_HOME`, `HIDE_PROJECTS`,
   `IDLE_REAP_MS`, `PTY_PORT`.
 - `.env.deploy` on your machine: `DEPLOY_SSH`, `DEPLOY_SSH_PORT`, `DEPLOY_DIR`, `PUBLIC_HOSTNAME`, `TUNNEL_NAME`.
 - Never commit hostnames, IPs, ports, tunnel ids, passwords or keys.

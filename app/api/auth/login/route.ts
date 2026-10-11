@@ -13,6 +13,13 @@ const g = globalThis as typeof globalThis & { __claudeUiLogin?: Map<string, numb
 const attempts = (g.__claudeUiLogin ??= new Map());
 
 async function checkPassword(password: string) {
+  /* plain UI_PASSWORD is allowed for convenience; the hash wins when both are set */
+  const plain = process.env.UI_PASSWORD;
+  if (plain && !process.env.UI_PASSWORD_HASH) {
+    const a = Buffer.from(password);
+    const b = Buffer.from(plain);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
   const stored = process.env.UI_PASSWORD_HASH ?? "";
   /* ":"-separated: Next's .env loader expands "$" sequences */
   const [scheme, salt, hash] = stored.split(":");
