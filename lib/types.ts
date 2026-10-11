@@ -89,5 +89,7 @@ export type ServerEvent =
   | { type: "delta"; delta: StreamDelta }
   | { type: "run"; run: RunState | null }
   | { type: "terminal"; terminal: TerminalInfo | null }
+  /** the session got (or changed) its title after the stream opened */
+  | { type: "title"; title: string }
   | { type: "redirect"; sessionId: string }
   | { type: "ping" };

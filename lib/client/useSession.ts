@@ -181,6 +181,7 @@ function reducer(state: SessionView, action: Action): SessionView {
       }
       if (e.type === "entries") return merge(state, e.entries, "append");
       if (e.type === "terminal") return { ...state, terminal: e.terminal };
+      if (e.type === "title") return { ...state, title: e.title };
       if (e.type === "run") {
         const ended = !e.run || e.run.status === "idle" || e.run.status === "closed" || e.run.status === "error";
         return { ...state, run: e.run, streams: ended ? [] : state.streams };

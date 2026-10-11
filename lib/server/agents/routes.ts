@@ -71,12 +71,18 @@ export async function agentEvents(req: NextRequest, agent: AgentId, native: stri
       /* live text of a web-driven turn; a running turn replays its text so far right after the history event */
       cleanups.push(onDelta(key, (delta) => send({ type: "delta", delta })));
       let last = JSON.stringify(terminal);
+      let title = session?.title ?? "";
       const tick = setInterval(async () => {
-        const t = await terminalOf(a, native).catch(() => null);
+        const [t, s] = await Promise.all([terminalOf(a, native).catch(() => null), a.get(native).catch(() => null)]);
         const k = JSON.stringify(t);
         if (k !== last) {
           last = k;
           send({ type: "terminal", terminal: t });
+        }
+        /* new sessions get their title from the agent a little after the first turn */
+        if (s?.title && s.title !== title) {
+          title = s.title;
+          send({ type: "title", title });
         }
       }, 3000);
       const ping = setInterval(() => send({ type: "ping" }), 15_000);
