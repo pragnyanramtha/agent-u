@@ -299,7 +299,7 @@ export function FolderPicker({
               const last = i === crumbs.length - 1;
               return (
                 <span key={c.path} className="flex shrink-0 items-center">
-                  {i > 0 && (
+                  {i > 0 && crumbs[i - 1].label !== "/" && (
                     <span aria-hidden className="px-0.5 text-ink-3">
                       /
                     </span>
