@@ -120,11 +120,19 @@ export async function typeIntoTerminal(target: InputTarget, text: string, { chec
   /* Claude's greyed next-turn suggestion and real half-typed text look the same in a screen dump,
    * so clear the box (Ctrl+U, per line) and report what was there in case it was real. */
   let cleared: string | null = null;
+  let ghost = false;
   for (let i = 0; i < 4 && !before.ok && before.code === "has_text"; i++) {
-    cleared ??= before.text;
+    const shown = before.text;
     await clearLine(target);
     await sleep(200);
     before = readPrompt(await paneScreen(target, true));
+    /* Ctrl+U removes typed text but not Claude's suggestion: unchanged text is the suggestion, and typing replaces it */
+    if (!before.ok && before.code === "has_text" && before.text === shown) {
+      ghost = true;
+      before = { ok: true };
+      break;
+    }
+    cleared ??= shown;
   }
   if (!before.ok) {
     if (before.code === "agent_focus") throw new InputRefused(`The terminal is focused on agent @${before.agent}, not this session. Switch it back to main in the terminal first.`, before.code);
@@ -137,6 +145,8 @@ export async function typeIntoTerminal(target: InputTarget, text: string, { chec
     await sleep(250);
     const after = readPrompt(await paneScreen(target, true));
     if (after.ok || after.code !== "has_text") return { queued: false, cleared };
+    /* with a suggestion showing, its text can linger after submit; that's not our message being stuck */
+    if (ghost) return { queued: false, cleared };
   }
   return { queued: true, cleared };
 }
