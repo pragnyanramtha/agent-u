@@ -63,6 +63,20 @@ const ppidOf = (pid) => {
   }
 };
 
+/** Attach command for the zellij/tmux a process runs in (walking up its parents), or null. */
+function attachForPid(start) {
+  for (let pid = start, depth = 0; pid > 1 && depth < 6; pid = ppidOf(pid), depth++) {
+    const zellij = envOf(pid, "ZELLIJ_SESSION_NAME");
+    if (zellij) return ["zellij", "attach", zellij];
+    const pane = envOf(pid, "TMUX_PANE");
+    if (pane) {
+      const name = execFileSync("tmux", ["display-message", "-p", "-t", pane, "#S"], { encoding: "utf8" }).trim();
+      return ["tmux", "attach-session", "-t", name];
+    }
+  }
+  return null;
+}
+
 /** The multiplexer attach command for the terminal a Claude session is open in, or null. */
 function attachCommand(sessionId) {
   const dir = path.join(CLAUDE_HOME, "sessions");
@@ -108,11 +122,18 @@ server.on("upgrade", (req, socket, head) => {
 
 function start(ws, url) {
   const session = url.searchParams.get("session");
+  const pid = Number(url.searchParams.get("pid"));
   const cols = Math.min(500, Math.max(10, Number(url.searchParams.get("cols")) || 100));
   const rows = Math.min(200, Math.max(5, Number(url.searchParams.get("rows")) || 30));
   let cmd;
   let cwd = os.homedir();
-  if (session) {
+  if (Number.isInteger(pid) && pid > 1 && fs.existsSync(`/proc/${pid}`)) {
+    cmd = attachForPid(pid);
+    if (!cmd) {
+      ws.close(4404, "That session isn't running in zellij or tmux.");
+      return;
+    }
+  } else if (session) {
     cmd = SESSION_ID.test(session) ? attachCommand(session) : null;
     if (!cmd) {
       ws.close(4404, "That session isn't open in zellij or tmux.");

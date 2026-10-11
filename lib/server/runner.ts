@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { query, type CanUseTool, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { PendingAsk, PermissionMode, Question, RunState, StreamDelta } from "@/lib/types";
+import type { Entry, PendingAsk, PermissionMode, Question, RunState, StreamDelta } from "@/lib/types";
+
+const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
 import { CLAUDE_BIN, IDLE_REAP_MS } from "./config";
 
 /* A web run drives one `claude` process through the Agent SDK in streaming
@@ -11,7 +13,9 @@ import { CLAUDE_BIN, IDLE_REAP_MS } from "./config";
 export type RunEvent =
   | { type: "delta"; delta: StreamDelta }
   | { type: "run"; run: RunState }
-  | { type: "redirect"; sessionId: string };
+  | { type: "redirect"; sessionId: string }
+  /* output the transcript doesn't carry (slash command output, notices), replayed to late viewers */
+  | { type: "entries"; entries: Entry[] };
 
 type Decision = { allow: boolean; always?: boolean; answers?: Record<string, string>; message?: string };
 
@@ -88,6 +92,7 @@ export class Run {
         permissionMode: opts.permissionMode,
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
+        promptSuggestions: true,
         settingSources: ["user", "project", "local"],
         systemPrompt: { type: "preset", preset: "claude_code" },
         pathToClaudeCodeExecutable: CLAUDE_BIN,
@@ -114,7 +119,7 @@ export class Run {
       message: { role: "user", content: text },
       parent_tool_use_id: null,
     } as SDKUserMessage);
-    this.update({ status: "running", error: null });
+    this.update({ status: "running", error: null, suggestion: null });
   }
 
   subscribe(fn: (e: RunEvent) => void) {
@@ -169,6 +174,14 @@ export class Run {
 
   private emit(e: RunEvent) {
     this.listeners.forEach((fn) => fn(e));
+  }
+
+  /** Entries only this run knows (kept for viewers who connect later; the newest 50). */
+  readonly extras: Entry[] = [];
+  private extra(e: Entry) {
+    this.extras.push(e);
+    if (this.extras.length > 50) this.extras.shift();
+    this.emit({ type: "entries", entries: [e] });
   }
 
   private update(patch: Partial<RunState>) {
@@ -248,6 +261,23 @@ export class Run {
         slashCommands: m.slash_commands.filter((c) => !hidden.has(c)),
       });
       this.markReady(m.session_id);
+      return;
+    }
+    /* /context, /usage, /cost and friends answer outside the transcript */
+    if (m.type === "system" && m.subtype === "local_command_output") {
+      this.extra({ kind: "text", id: m.uuid, ts: new Date().toISOString(), msgId: m.uuid, text: m.content.replace(ANSI, "") });
+      return;
+    }
+    if (m.type === "system" && m.subtype === "informational" && (m.level === "warning" || m.level === "suggestion")) {
+      this.extra({ kind: "notice", id: m.uuid, ts: new Date().toISOString(), tone: m.level === "warning" ? "warn" : "info", text: m.content.replace(ANSI, "") });
+      return;
+    }
+    if (m.type === "system" && m.subtype === "commands_changed") {
+      this.update({ slashCommands: m.commands.map((c) => c.name) });
+      return;
+    }
+    if (m.type === "prompt_suggestion") {
+      this.update({ suggestion: m.suggestion });
       return;
     }
     if (m.type === "system" && m.subtype === "session_state_changed") {

@@ -1,10 +1,51 @@
-export type ToolIcon = "read" | "edit" | "run" | "search" | "web" | "agent" | "plan" | "ask" | "tool";
+export type ToolIcon = "read" | "edit" | "run" | "terminal" | "search" | "web" | "agent" | "plan" | "ask" | "tool";
 
 export type ToolSummary = { verb: string; chip: string; mono: boolean; icon: ToolIcon };
 
 const base = (p: unknown) => (typeof p === "string" ? p.split("/").filter(Boolean).pop() ?? p : "");
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const firstLine = (s: string) => s.split("\n")[0];
+
+/* ── apply_patch envelopes (Codex / OpenCode) ─────────────── */
+
+export type PatchLine = { tone: "add" | "del" | "ctx" | "hunk"; text: string };
+export type PatchFile = { op: "update" | "add" | "delete"; path: string; moveTo: string | null; lines: PatchLine[]; added: number; removed: number };
+
+/**
+ * Parses the "*** Begin Patch" format: `*** Update File: p` (optionally `*** Move to: q`),
+ * `*** Add File: p`, `*** Delete File: p`, then `@@` hunk headers and ` `/`-`/`+` lines.
+ */
+export function parsePatch(patch: string): PatchFile[] {
+  const files: PatchFile[] = [];
+  let cur: PatchFile | null = null;
+  for (const raw of patch.replace(/\r\n/g, "\n").split("\n")) {
+    const head = /^\*\*\* (Update|Add|Delete) File:\s*(.+?)\s*$/.exec(raw);
+    if (head) {
+      cur = { op: head[1].toLowerCase() as PatchFile["op"], path: head[2], moveTo: null, lines: [], added: 0, removed: 0 };
+      files.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const move = /^\*\*\* Move to:\s*(.+?)\s*$/.exec(raw);
+    if (move) {
+      cur.moveTo = move[1];
+      continue;
+    }
+    if (/^\*\*\* (Begin|End) Patch\b/.test(raw) || raw.startsWith("*** End of File")) continue;
+    if (raw.startsWith("@@")) cur.lines.push({ tone: "hunk", text: raw.replace(/^@@\s?/, "").replace(/\s?@@$/, "") });
+    else if (raw.startsWith("+")) {
+      cur.lines.push({ tone: "add", text: raw.slice(1) });
+      cur.added++;
+    } else if (raw.startsWith("-")) {
+      cur.lines.push({ tone: "del", text: raw.slice(1) });
+      cur.removed++;
+    } else if (raw.startsWith(" ")) cur.lines.push({ tone: "ctx", text: raw.slice(1) });
+    else if (raw === "" && cur.lines.length) cur.lines.push({ tone: "ctx", text: "" });
+  }
+  /* trailing blank context left by the envelope's final newline */
+  for (const f of files) while (f.lines.length && f.lines[f.lines.length - 1].tone === "ctx" && f.lines[f.lines.length - 1].text === "") f.lines.pop();
+  return files;
+}
 
 /** One-line label + chip for a tool call, in the same grammar as Beautiful UI's ToolChips rows. */
 export function summarizeTool(name: string, input: Record<string, unknown>): ToolSummary {
@@ -20,9 +61,16 @@ export function summarizeTool(name: string, input: Record<string, unknown>): Too
       return { verb: "Edited notebook", chip: base(input.notebook_path), mono: true, icon: "edit" };
     case "Bash":
       return { verb: str(input.description) ? firstLine(str(input.description)) : "Ran", chip: firstLine(str(input.command)), mono: true, icon: "run" };
+    case "ApplyPatch":
+    case "apply_patch": {
+      const files = parsePatch(str(input.patch));
+      const names = [...new Set(files.map((f) => base(f.moveTo ?? f.path)))];
+      return { verb: "Patched", chip: names.join(", "), mono: true, icon: "edit" };
+    }
     case "BashOutput":
+      return { verb: "Read output", chip: str(input.bash_id) || str(input.shell_id), mono: true, icon: "terminal" };
     case "TaskOutput":
-      return { verb: "Checked output", chip: str(input.bash_id) || str(input.task_id), mono: true, icon: "run" };
+      return { verb: "Checked output", chip: str(input.task_id) || str(input.bash_id), mono: true, icon: "run" };
     case "KillShell":
     case "TaskStop":
       return { verb: "Stopped", chip: str(input.shell_id) || str(input.task_id), mono: true, icon: "run" };

@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GitCompare, Menu, MoreHoriz, Terminal } from "iconoir-react";
-import type { PermissionMode } from "@/lib/types";
+import { AGENT_LABEL, type AgentId, type PermissionMode } from "@/lib/types";
+import { AgentBadge } from "./SessionList";
 import { api, ApiError, shortPath } from "@/lib/client/api";
 import { useSession } from "@/lib/client/useSession";
 import { terminalBusy } from "@/lib/status";
@@ -10,6 +11,9 @@ import { AskCards } from "./AskCards";
 import { Composer, MODELS } from "./Composer";
 import { MODE_ALIASES } from "@/lib/commands";
 import { ChangesPanel, collectChanges } from "./ChangesPanel";
+import { OPEN_USAGE_EVENT } from "./ContextRing";
+import { UsagePanel } from "./UsagePanel";
+import { sessionCost } from "@/lib/client/usage";
 import { PendingBubble } from "./PendingBubble";
 import { TerminalPeek } from "./TerminalPeek";
 import { Pulse } from "./Pulse";
@@ -36,6 +40,15 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
   const [menuOpen, setMenuOpen] = useState(false);
   const [peek, setPeek] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
+  useEffect(() => {
+    const open = () => {
+      setChangesOpen(false);
+      setUsageOpen(true);
+    };
+    window.addEventListener(OPEN_USAGE_EVENT, open);
+    return () => window.removeEventListener(OPEN_USAGE_EVENT, open);
+  }, []);
   const [composerRef, composerH] = useMeasure<HTMLDivElement>();
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -46,7 +59,10 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
   const mode = run?.permissionMode ?? localMode ?? view.permissionMode ?? "default";
   const model = localModel ?? run?.model ?? null;
   const where = terminal ? terminal.multiplexer ?? "a terminal" : null;
+  const agent: AgentId = id.includes(":") ? (id.slice(0, id.indexOf(":")) as AgentId) : "claude";
+  const agentName = AGENT_LABEL[agent];
   const changes = useMemo(() => collectChanges(view.entries, view.results), [view.entries, view.results]);
+  const cost = useMemo(() => sessionCost(view.entries, view.run), [view.entries, view.run]);
   const usage = useMemo(() => {
     for (let i = view.entries.length - 1; i >= 0; i--) {
       const e = view.entries[i];
@@ -95,12 +111,14 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
     async (localId: string, text: string) => {
       updatePending(localId, { state: "sending", error: undefined, at: Date.now() });
       try {
-        const res = await api<{ id: string; via?: "terminal" | "web" }>(`/api/sessions/${id}/message`, {
+        const res = await api<{ id: string; via?: "terminal" | "web"; cleared?: string | null }>(`/api/sessions/${id}/message`, {
           text,
           model: localModel ?? undefined,
           permissionMode: localMode ?? undefined,
         });
         updatePending(localId, { state: "sent", via: res.via, at: Date.now() });
+        /* a greyed suggestion or half-typed text was in the terminal's prompt; say what was cleared */
+        if (res.cleared && !/^Try "/.test(res.cleared)) setError(`Cleared "${res.cleared.slice(0, 80)}" from the terminal's prompt before sending.`);
         if (res.id !== id) onNavigate(res.id);
       } catch (err) {
         updatePending(localId, { state: "failed", error: err instanceof ApiError ? err.message : "Couldn't reach the server." });
@@ -189,13 +207,21 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
             <h1 className="truncate text-[14.5px] font-semibold tracking-[-0.01em] text-ink" title={view.title || undefined}>
               {view.title || (view.status === "missing" ? "Couldn’t load this session" : "Loading session…")}
             </h1>
-            <p className="truncate font-mono text-[11.5px] text-ink-3" translate="no">{shortPath(view.cwd)}</p>
+            <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
+              {agent !== "claude" && <AgentBadge agent={agent} />}
+              <span className="truncate font-mono" translate="no">
+                {shortPath(view.cwd)}
+              </span>
+            </p>
           </div>
           {status}
           {changes.length > 0 && (
             <button
               type="button"
-              onClick={() => setChangesOpen((v) => !v)}
+              onClick={() => {
+                setUsageOpen(false);
+                setChangesOpen((v) => !v);
+              }}
               aria-pressed={changesOpen}
               aria-label={`Changes: ${changes.length} ${changes.length === 1 ? "file" : "files"}`}
               title="Changes"
@@ -257,12 +283,12 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
           )}
         </div>
       </header>
-      {peek && terminal && !run && <TerminalPeek id={id} where={where ?? "terminal"} onClose={() => setPeek(false)} />}
+      {peek && terminal && !run && <TerminalPeek id={id} pid={terminal.pid} where={where ?? "terminal"} onClose={() => setPeek(false)} />}
 
       <Thread
         view={view}
         busy={Boolean(busy)}
-        workingLabel={terminal && !run ? `Working in ${where}` : "Thinking"}
+        workingLabel={terminal && !run ? `Working in ${where}` : agent === "claude" ? "Thinking" : `${agentName} is working`}
         onLoadOlder={() => void loadOlder()}
         pendingSlot={(p) => (
           <PendingBubble
@@ -313,13 +339,16 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
                 if (run) void control("model", m);
               }}
               autoFocus
-              cwd={view.cwd || undefined}
+              cwd={agent === "claude" ? view.cwd || undefined : undefined}
+              models={agent === "claude" ? undefined : [{ key: "", name: "Default" }]}
               usage={usage}
+              suggestion={run?.suggestion ?? null}
+              cost={cost}
               costUsd={run?.costUsd ?? null}
               onAppCommand={(name, arg) => {
                 const a = arg.toLowerCase();
                 if (name === "model") {
-                  const m = MODELS.find((x) => x.key === a || x.name.toLowerCase() === a)?.key ?? (a === "default" ? "" : null);
+                  const m = MODELS.find((x) => x.key === a || x.name.toLowerCase().startsWith(a))?.key ?? (a === "default" ? "" : null);
                   if (m === null) return setError("Use /model opus, sonnet, haiku, or default."), true;
                   setLocalModel(m || null);
                   if (run) void control("model", m);
@@ -342,6 +371,7 @@ export function SessionScreen({ id, onMenu, onNavigate, onNew }: { id: string; o
         </div>
       </div>
     </section>
+    {usageOpen && <UsagePanel view={view} onClose={() => setUsageOpen(false)} />}
     {changesOpen && <ChangesPanel changes={changes} cwd={view.cwd} partial={view.cursor !== null} onClose={() => setChangesOpen(false)} />}
     </div>
   );

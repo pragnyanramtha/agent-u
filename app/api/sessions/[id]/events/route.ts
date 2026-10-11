@@ -7,6 +7,8 @@ import { getRun, onRunRegistered, type RunEvent } from "@/lib/server/runner";
 import { isSessionId, terminalFor } from "@/lib/server/sessions";
 import { tailFile } from "@/lib/server/tail";
 import { metaTitle, readHistory } from "@/lib/server/transcript";
+import { parseSessionKey } from "@/lib/server/agents";
+import { agentEvents } from "@/lib/server/agents/routes";
 
 export const dynamic = "force-dynamic";
 
@@ -16,14 +18,20 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   /* on auto-reconnect the browser sends the last event id (a byte offset), which beats the original ?from */
-  return stream(req, id, req.headers.get("last-event-id") || req.nextUrl.searchParams.get("from"));
+  return route(req, id, req.headers.get("last-event-id") || req.nextUrl.searchParams.get("from"));
+}
+
+function route(req: NextRequest, raw: string, from: string | null) {
+  const key = parseSessionKey(decodeURIComponent(raw));
+  if (!key) return new Response("Not found", { status: 404 });
+  return key.agent === "claude" ? stream(req, key.native, from) : agentEvents(req, key.agent, key.native, from);
 }
 
 /* Same stream over POST: Cloudflare quick tunnels buffer GET event streams until they close, POST streams flow. */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const from = (await readJson(req)).from;
-  return stream(req, id, typeof from === "number" ? String(from) : null);
+  return route(req, id, typeof from === "number" || typeof from === "string" ? String(from) : null);
 }
 
 async function stream(req: NextRequest, id: string, fromParam: string | null) {
@@ -138,6 +146,8 @@ async function stream(req: NextRequest, id: string, fromParam: string | null) {
         cwd: cwd ?? "",
         permissionMode: parseMode(ctx?.meta.permissionMode),
       });
+      /* what the run said outside the transcript (slash command output) */
+      if (watchedRun?.extras.length) send({ type: "entries", entries: watchedRun.extras });
       /* history entries follow in small frames (older clients without ?from still work behind Cloudflare) */
       for (let i = 0; i < history.entries.length; i += 20) send({ type: "entries", entries: history.entries.slice(i, i + 20) });
       if (req.signal.aborted) cleanup();

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import type { Entry, PermissionMode, RunState, ServerEvent, StreamDelta, TerminalInfo, ToolResult } from "@/lib/types";
+import type { AgentId, Entry, PermissionMode, RunState, ServerEvent, StreamDelta, TerminalInfo, ToolResult } from "@/lib/types";
 import { api } from "./api";
 
 type Stream = { msgId: string; index: number; kind: StreamDelta["kind"]; text: string };
@@ -166,9 +166,9 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
     /* history over a plain fetch, then a live stream from where it ended. The stream is a POST
      * read with fetch (not EventSource): some tunnels buffer GET event streams until they close. */
     (async () => {
-      let from: number;
+      let from: string | number;
       try {
-        const first = await api<Extract<ServerEvent, { type: "history" }> & { end: number }>(`/api/sessions/${id}`);
+        const first = await api<Extract<ServerEvent, { type: "history" }> & { end: string | number; agent?: AgentId }>(`/api/sessions/${id}`);
         if (abort.signal.aborted) return;
         dispatch({ type: "event", event: first });
         from = first.end;
@@ -214,7 +214,7 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
               buf = buf.slice(cut + 2);
               let data = "";
               for (const line of frame.split("\n")) {
-                if (line.startsWith("id: ")) from = Number(line.slice(4)) || from;
+                if (line.startsWith("id: ")) from = line.slice(4).trim() || from;
                 else if (line.startsWith("data: ")) data += line.slice(6);
               }
               if (!data) continue;

@@ -1,13 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { parseMode, readJson, str } from "@/lib/server/http";
 import { getRun } from "@/lib/server/runner";
+import { parseSessionKey } from "@/lib/server/agents";
+import { agentControl } from "@/lib/server/agents/routes";
 
 export const dynamic = "force-dynamic";
 
 /** Interrupt the current turn, switch permission mode or model, or shut the web run down. */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  const { id: raw } = await params;
   const body = await readJson(req);
+  const key = parseSessionKey(decodeURIComponent(raw));
+  if (!key) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  if (key.agent !== "claude") return agentControl(key.agent, key.native, body);
+  const id = key.native;
   const run = getRun(id);
   if (!run) return NextResponse.json({ error: "No web run for this session." }, { status: 404 });
 

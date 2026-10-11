@@ -29,7 +29,7 @@ const KEYS: [string, string, string][] = [
 ];
 
 /** A live look at the terminal pane the session runs in, refreshed every 2s while open, with keys for dialogs. */
-export function TerminalPeek({ id, where, onClose }: { id: string; where: string; onClose: () => void }) {
+export function TerminalPeek({ id, pid, where, onClose }: { id: string; pid?: number; where: string; onClose: () => void }) {
   const [screen, setScreen] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +82,7 @@ export function TerminalPeek({ id, where, onClose }: { id: string; where: string
         {label && <span className={`hidden min-w-0 truncate md:inline ${label.tone}`}>· {label.text}</span>}
         <button
           type="button"
-          onClick={() => window.dispatchEvent(new CustomEvent(OPEN_TERMINAL_EVENT, { detail: { session: id, label: where } }))}
+          onClick={() => window.dispatchEvent(new CustomEvent(OPEN_TERMINAL_EVENT, { detail: { session: id, pid, label: where } }))}
           className="tap relative ml-auto shrink-0 rounded-full bg-surface px-2.5 py-1 text-[11.5px] font-medium text-ink shadow-hairline hover:bg-hover"
         >
           Open interactive

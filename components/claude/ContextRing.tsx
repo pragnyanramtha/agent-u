@@ -2,16 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Entry } from "@/lib/types";
+import { contextOf, contextTone, fmtTokens as k, fmtUsd, type SessionCost } from "@/lib/client/usage";
 
 export type ContextUsage = Extract<Entry, { kind: "usage" }>;
 
-/* Claude Code 2.x runs current models with a 1M window; older claude-3 models had 200k. */
-export const contextWindow = (u: ContextUsage) => (/claude-3/.test(u.model) && u.input + u.cacheRead + u.cacheWrite <= 200_000 ? 200_000 : 1_000_000);
+export { contextWindow } from "@/lib/client/usage";
 
-const k = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M` : n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : String(n));
+/** Event the "Details" button fires; the session screen opens the usage panel on it. */
+export const OPEN_USAGE_EVENT = "open-usage";
 
-/** The context the latest turn saw, as a ring in the composer rail; tap or hover for the breakdown. */
-export function ContextRing({ usage, costUsd = null }: { usage: ContextUsage | null; costUsd?: number | null }) {
+/**
+ * The context the latest turn saw, as a ring in the composer rail; tap or hover for the breakdown.
+ * `cost` (from `sessionCost()`) shows the session's cost, actual or est.; without it, `costUsd` is shown as the web run's cost.
+ */
+export function ContextRing({ usage, costUsd = null, cost = null }: { usage: ContextUsage | null; costUsd?: number | null; cost?: SessionCost | null }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -28,10 +32,9 @@ export function ContextRing({ usage, costUsd = null }: { usage: ContextUsage | n
   }, [open]);
 
   if (!usage) return null;
-  const used = usage.input + usage.cacheRead + usage.cacheWrite;
-  const window = contextWindow(usage);
-  const pct = Math.min(1, used / window);
-  const tone = pct >= 0.9 ? "var(--red)" : pct >= 0.7 ? "var(--orange)" : "var(--ink-2)";
+  const { used, window: limit, pct } = contextOf(usage);
+  const tone = contextTone(pct);
+  const shown: SessionCost | null = cost ?? (costUsd !== null ? { usd: costUsd, estimated: false, estUsd: costUsd, actualUsd: costUsd, fallback: false } : null);
   const r = 7;
   const c = 2 * Math.PI * r;
   const rows: [string, number][] = [
@@ -45,7 +48,7 @@ export function ContextRing({ usage, costUsd = null }: { usage: ContextUsage | n
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label={`Context: ${Math.round(pct * 100)}% used, ${k(used)} of ${k(window)} tokens`}
+        aria-label={`Context: ${Math.round(pct * 100)}% used, ${k(used)} of ${k(limit)} tokens`}
         aria-expanded={open}
         className="tap relative flex h-9 items-center gap-1.5 rounded-full px-2 text-[12px] font-medium text-ink-3 tabular-nums transition-colors duration-150 hover:bg-hover hover:text-ink-2 sm:h-7"
       >
@@ -75,7 +78,7 @@ export function ContextRing({ usage, costUsd = null }: { usage: ContextUsage | n
           <div className="flex items-baseline justify-between">
             <span className="font-medium text-ink">Context</span>
             <span className="text-ink-2 tabular-nums">
-              {k(used)} / {k(window)}
+              {k(used)} / {k(limit)}
             </span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-inset">
@@ -95,18 +98,33 @@ export function ContextRing({ usage, costUsd = null }: { usage: ContextUsage | n
             <div className="flex justify-between">
               <dt className="text-ink-3">Free</dt>
               <dd className="text-ink-2 tabular-nums">
-                {k(Math.max(0, window - used))} ({Math.round((1 - pct) * 100)}%)
+                {k(Math.max(0, limit - used))} ({Math.round((1 - pct) * 100)}%)
               </dd>
             </div>
           </dl>
-          {costUsd !== null && (
+          {shown && (
             <div className="mt-1.5 flex justify-between text-[12.5px]">
-              <span className="text-ink-3">Web run cost</span>
-              <span className="text-ink-2 tabular-nums">${costUsd < 0.01 ? costUsd.toFixed(4) : costUsd.toFixed(2)}</span>
+              <span className="text-ink-3">{cost ? "Session cost" : "Web run cost"}</span>
+              <span className="text-ink-2 tabular-nums" title={shown.estimated ? "Estimated from token counts at list prices" : "Reported by the run"}>
+                {fmtUsd(shown.usd)}
+                {shown.estimated && <span className="ml-1 text-ink-3">est.</span>}
+              </span>
             </div>
           )}
-          {usage.model && <p className="mt-2.5 truncate font-mono text-[11px] text-ink-3">{usage.model}</p>}
           {pct >= 0.8 && <p className="mt-1.5 text-[12px] text-orange-ink">Getting full. /compact frees space.</p>}
+          <div className="mt-2.5 flex items-center gap-2">
+            <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink-3">{usage.model}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                window.dispatchEvent(new Event(OPEN_USAGE_EVENT));
+              }}
+              className="-my-1 -mr-1 shrink-0 rounded-[7px] px-2 py-1 text-[12px] font-medium text-ink-2 transition-colors duration-100 hover:bg-hover hover:text-ink"
+            >
+              Details
+            </button>
+          </div>
         </div>
       )}
     </div>

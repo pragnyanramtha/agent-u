@@ -4,10 +4,11 @@ import { memo, useRef, useState, type CSSProperties, type ReactNode } from "reac
 import { ChatBubble, EditPencil, Globe, NavArrowDown, Page, Search, Sparks, TaskList, Terminal, Tools } from "iconoir-react";
 import type { Entry, ToolResult } from "@/lib/types";
 import { highlight } from "@/lib/client/highlight";
-import { cleanResult, hostOf, parseNumbered, parseWebSearch, prettyJson, relativeTo, splitPath, summarizeTool, type ToolIcon } from "@/lib/client/tools";
+import { cleanResult, hostOf, parsePatch, parseNumbered, parseWebSearch, prettyJson, relativeTo, splitPath, summarizeTool, type ToolIcon } from "@/lib/client/tools";
 import { CodeCard } from "./CodeCard";
 import { DiffBlock } from "./DiffBlock";
 import { Markdown } from "./Markdown";
+import { PathLabel } from "./PathLabel";
 import { TodoList } from "./TodoList";
 import { ENTER, SHIMMER, useOnScreen } from "./motion";
 
@@ -17,6 +18,7 @@ const ICONS: Record<ToolIcon | "think", (p: { width: number; height: number; str
   read: (p) => <Page {...p} />,
   edit: (p) => <EditPencil {...p} />,
   run: (p) => <Terminal {...p} />,
+  terminal: (p) => <Terminal {...p} />,
   search: (p) => <Search {...p} />,
   web: (p) => <Globe {...p} />,
   agent: (p) => <Sparks {...p} />,
@@ -271,6 +273,53 @@ function TextBlock({ text, max = "max-h-40" }: { text: string; max?: string }) {
 
 const Stack = ({ children }: { children: ReactNode }) => <div className="flex min-w-0 flex-col gap-1.5">{children}</div>;
 
+const PATCH_HATCH = "repeating-linear-gradient(45deg, var(--red) 0, var(--red) 1.5px, transparent 1.5px, transparent 3px)";
+const PATCH_OP: Record<"update" | "add" | "delete", string> = { update: "", add: "added", delete: "deleted" };
+
+/** Codex / OpenCode apply_patch envelopes: one DiffBlock-style card per file, rows tinted like DiffBlock. */
+function PatchView({ patch }: { patch: string }) {
+  const files = parsePatch(patch);
+  if (!files.length) return <Pre wrap={false}>{patch || "Empty patch"}</Pre>;
+  return (
+    <>
+      {files.map((f, i) => (
+        <div key={i} className="w-full overflow-hidden rounded-card bg-surface shadow-card">
+          <div className="flex h-9 min-w-0 items-center gap-2 border-b border-line px-3 font-mono text-[12px]">
+            <PathLabel path={f.moveTo ?? f.path} className="min-w-0" />
+            {f.moveTo && <span className="shrink-0 font-sans text-[11.5px] text-ink-3">moved</span>}
+            {PATCH_OP[f.op] && <span className="shrink-0 font-sans text-[11.5px] text-ink-3">{PATCH_OP[f.op]}</span>}
+            <span className="ml-auto shrink-0 tabular-nums">
+              <span className="text-green">+{f.added}</span> <span className="text-red">-{f.removed}</span>
+            </span>
+          </div>
+          {f.lines.length > 0 && (
+            <div tabIndex={0} translate="no" className={`max-h-[26rem] ${SCROLL} py-1.5 font-mono text-[12px] leading-[1.65] text-ink-2`}>
+              <div className="relative min-w-fit">
+                {f.lines.map((l, j) =>
+                  l.tone === "hunk" ? (
+                    l.text ? (
+                      <div key={j} className="mt-1 py-0.5 pr-4 pl-4 text-[11px] whitespace-pre text-ink-3 first:mt-0">
+                        {l.text}
+                      </div>
+                    ) : (
+                      <div key={j} className="mx-4 my-1 border-t border-dashed border-line first:hidden" />
+                    )
+                  ) : (
+                    <div key={j} className={`relative pr-4 pl-4 ${l.tone === "add" ? "bg-green-tint" : l.tone === "del" ? "bg-red-tint" : ""}`}>
+                      {l.tone !== "ctx" && <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: l.tone === "add" ? "var(--green)" : PATCH_HATCH }} />}
+                      <code className="whitespace-pre">{l.text ? highlight(l.text) : " "}</code>
+                    </div>
+                  ),
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
 /* subagent results end with bookkeeping meant for the model, not the reader */
 const stripAgentMeta = (s: string) =>
   s
@@ -311,6 +360,14 @@ function Detail({ item, result, active }: { item: RunItem; result?: ToolResult; 
       return (
         <Stack>
           <CodeCard code={s("content")} label={s("file_path")} />
+          {result?.isError && <Output result={result} />}
+        </Stack>
+      );
+    case "ApplyPatch":
+    case "apply_patch":
+      return (
+        <Stack>
+          <PatchView patch={s("patch")} />
           {result?.isError && <Output result={result} />}
         </Stack>
       );

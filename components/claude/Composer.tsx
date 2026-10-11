@@ -5,6 +5,7 @@ import { ArrowUp, Check, NavArrowDown } from "iconoir-react";
 import GlideMenu from "@/components/primitives/GlideMenu";
 import { APP_COMMANDS, rankCommands, type SlashItem } from "@/lib/commands";
 import { ContextRing, type ContextUsage } from "./ContextRing";
+import type { SessionCost } from "@/lib/client/usage";
 import type { PermissionMode } from "@/lib/types";
 
 /* The composer from Beautiful UI's PromptBar (tall variant), wired for Claude:
@@ -22,7 +23,8 @@ export const MODELS = [
   { key: "", name: "Default" },
   { key: "opus", name: "Opus" },
   { key: "sonnet", name: "Sonnet" },
-  { key: "haiku", name: "Haiku" },
+  /* the "haiku" alias still resolves to Haiku 4.5 on current Claude Code */
+  { key: "claude-haiku-5-5", name: "Haiku 5.5" },
 ];
 
 export function modelLabel(model: string | null) {
@@ -81,6 +83,9 @@ export function Composer({
   onAppCommand,
   usage = null,
   costUsd = null,
+  models = MODELS,
+  suggestion = null,
+  cost = null,
 }: {
   draftKey: string;
   placeholder: string;
@@ -101,6 +106,12 @@ export function Composer({
   /** latest turn's token usage, shown as the context ring */
   usage?: ContextUsage | null;
   costUsd?: number | null;
+  /** model choices for this agent (Claude's by default) */
+  models?: { key: string; name: string }[];
+  /** Claude's suggested next message; Tab or a tap puts it in the box */
+  suggestion?: string | null;
+  /** session cost (actual or estimated) for the context popover */
+  cost?: SessionCost | null;
 }) {
   const [draft, setDraft] = useState("");
   const [menu, setMenu] = useState<Menu>(null);
@@ -308,8 +319,8 @@ export function Composer({
         <MenuShell left={menuLeft} width={MENU_W.model}>
           <div ref={menuRef} role="menu" id={`${uid}-model`} aria-label="Model" onKeyDown={moveFocus}>
             <GlideMenu className="flex flex-col" highlightClassName="inset-x-0 rounded-[8px] bg-hover">
-              {MODELS.map((m) => {
-                const on = m.key === (model && MODELS.some((x) => x.key === model) ? model : "");
+              {models.map((m) => {
+                const on = m.key === (model && models.some((x) => x.key === model) ? model : "");
                 return (
                   <button
                     key={m.key || "default"}
@@ -324,7 +335,7 @@ export function Composer({
                     className="relative z-10 flex h-10 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-[13px] font-medium text-ink focus-visible:outline-offset-[-2px] sm:h-8"
                   >
                     <span className={on ? "text-accent-ink" : ""}>{m.name}</span>
-                    {m.key === "" && model && !MODELS.some((x) => x.key === model) && <span className="truncate text-[12px] font-normal text-ink-3">{modelLabel(model)}</span>}
+                    {m.key === "" && model && !models.some((x) => x.key === model) && <span className="truncate text-[12px] font-normal text-ink-3">{modelLabel(model)}</span>}
                     {on && <Check width={15} height={15} strokeWidth={2.2} className="ml-auto shrink-0 text-accent-ink" aria-hidden />}
                   </button>
                 );
@@ -336,6 +347,20 @@ export function Composer({
 
       <div className="relative flex flex-col gap-1 rounded-[22px] border border-line bg-surface p-2.5 shadow-card transition-[border-color] duration-150 focus-within:border-line-strong sm:p-3">
         {notice}
+        {suggestion && !draft && (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(suggestion);
+              inputRef.current?.focus();
+            }}
+            className="flex w-full min-w-0 items-center gap-2 rounded-[12px] px-1.5 pt-0.5 text-left text-[12.5px] text-ink-3 hover:text-ink-2"
+            title="Use this suggestion (Tab)"
+          >
+            <span className="shrink-0 rounded-[5px] bg-inset px-1.5 py-px font-mono text-[10.5px] shadow-hairline">Tab</span>
+            <span className="min-w-0 truncate">{suggestion}</span>
+          </button>
+        )}
         <textarea
           ref={inputRef}
           rows={1}
@@ -357,6 +382,11 @@ export function Composer({
                 pickCommand(commands[active].name);
                 return;
               }
+            }
+            if (e.key === "Tab" && !draft && suggestion && !e.shiftKey) {
+              e.preventDefault();
+              setDraft(suggestion);
+              return;
             }
             /* Enter is a newline; Ctrl/Cmd+Enter sends */
             if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) {
@@ -421,7 +451,7 @@ export function Composer({
           </button>
 
           <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
-            <ContextRing usage={usage} costUsd={costUsd} />
+            <ContextRing usage={usage} costUsd={costUsd} cost={cost} />
             {running && onStop && (
               <button
                 type="button"

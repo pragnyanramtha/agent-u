@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Folder, Menu } from "iconoir-react";
 import LoadingState from "@/components/primitives/LoadingState";
-import type { PermissionMode, SessionSummary } from "@/lib/types";
+import { AGENT_LABEL, type AgentId, type PermissionMode, type SessionSummary } from "@/lib/types";
 import { api, ApiError, shortPath } from "@/lib/client/api";
 import { Composer } from "./Composer";
 import { Pulse } from "./Pulse";
@@ -39,6 +39,21 @@ export function NewSession({
   const [cwd, setCwd] = useState("");
   const [mode, setMode] = useState<PermissionMode>("default");
   const [model, setModel] = useState("");
+  const [agent, setAgent] = useState<AgentId>("claude");
+  const [agents, setAgents] = useState<{ id: AgentId; label: string; installed: boolean }[]>([]);
+  useEffect(() => {
+    const saved = localStorage.getItem("cui:newAgent") as AgentId | null;
+    if (saved) setAgent(saved);
+    api<{ agents: { id: AgentId; label: string; installed: boolean }[] }>("/api/agents")
+      .then((d) => setAgents(d.agents))
+      .catch(() => undefined);
+  }, []);
+  const pickAgent = (a: AgentId) => {
+    setAgent(a);
+    setModel("");
+    localStorage.setItem("cui:newAgent", a);
+  };
+  const name = AGENT_LABEL[agent];
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hello, setHello] = useState("");
@@ -77,7 +92,7 @@ export function NewSession({
     }
     setStarting(true);
     try {
-      const { id } = await api<{ id: string }>("/api/sessions", { cwd: cwd.trim(), text, model: model || undefined, permissionMode: mode });
+      const { id } = await api<{ id: string }>("/api/sessions", { agent, cwd: cwd.trim(), text, model: model || undefined, permissionMode: mode });
       localStorage.setItem("cui:lastCwd", cwd.trim());
       onOpen(id);
       return true;
@@ -105,7 +120,7 @@ export function NewSession({
               {hello || "\u00a0"}
             </span>
             <span className="home-reveal block" style={reveal(stage >= 2)}>
-              What should Claude work on?
+              What should {name} work on?
             </span>
           </h1>
 
@@ -153,9 +168,29 @@ export function NewSession({
                 ))}
               </datalist>
             </label>
+            {agents.length > 1 && (
+              <div className="no-scrollbar -mx-1 flex items-center gap-1 overflow-x-auto px-1" role="radiogroup" aria-label="Agent">
+                {agents.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={agent === a.id}
+                    disabled={!a.installed}
+                    title={a.installed ? undefined : `${a.label} isn't installed on the server`}
+                    onClick={() => pickAgent(a.id)}
+                    className={`tap relative h-8 shrink-0 rounded-full px-3 text-[12.5px] font-medium transition-colors duration-150 disabled:opacity-40 ${
+                      agent === a.id ? "bg-ink text-surface" : "bg-field text-ink-2 shadow-hairline hover:text-ink"
+                    }`}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            )}
             {starting ? (
               <div className="flex h-[118px] items-center justify-center rounded-[22px] border border-line bg-surface shadow-card" role="status">
-                <LoadingState label="Starting Claude…" variant="Dots" />
+                <LoadingState label={`Starting ${name}…`} variant="Dots" />
               </div>
             ) : (
               <Composer
@@ -168,7 +203,8 @@ export function NewSession({
                 onModeChange={setMode}
                 model={model || null}
                 onModelChange={setModel}
-                cwd={cwd.trim() || undefined}
+                models={agent === "claude" ? undefined : [{ key: "", name: "Default" }]}
+                cwd={agent === "claude" ? cwd.trim() || undefined : undefined}
                 autoFocus
               />
             )}

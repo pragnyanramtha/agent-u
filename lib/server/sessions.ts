@@ -49,7 +49,7 @@ async function descendsFromUs(ppid: number) {
   return false;
 }
 
-async function multiplexer(pid: number) {
+export async function multiplexer(pid: number) {
   const env = await fs.readFile(`/proc/${pid}/environ`, "utf8").catch(() => "");
   const vars = Object.fromEntries(env.split("\0").map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
   if (vars.ZELLIJ_SESSION_NAME) return `zellij ${vars.ZELLIJ_SESSION_NAME}`;
@@ -119,7 +119,7 @@ export async function listSessions(limit = 120): Promise<Omit<SessionSummary, "w
       const title = metaTitle(meta);
       if (!title) return null;
       const cwd = meta.cwd ?? "";
-      return { id, title, cwd, project: path.basename(cwd) || cwd, mtime, size, terminal: terminals.get(id) ?? null };
+      return { id, agent: "claude" as const, title, cwd, project: path.basename(cwd) || cwd, mtime, size, terminal: terminals.get(id) ?? null };
     }),
   );
   return rows.filter((r): r is NonNullable<typeof r> => r !== null);

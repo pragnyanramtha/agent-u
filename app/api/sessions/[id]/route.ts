@@ -3,6 +3,8 @@ import { parseMode, sessionContext } from "@/lib/server/http";
 import { getRun } from "@/lib/server/runner";
 import { terminalFor } from "@/lib/server/sessions";
 import { metaTitle, readHistory } from "@/lib/server/transcript";
+import { parseSessionKey } from "@/lib/server/agents";
+import { agentHistory } from "@/lib/server/agents/routes";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +13,11 @@ export const dynamic = "force-dynamic";
  * With `before`: an older page, walking backwards from that byte offset.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  const { id: raw } = await params;
+  const key = parseSessionKey(decodeURIComponent(raw));
+  if (!key) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  if (key.agent !== "claude") return agentHistory(key.agent, key.native, req.nextUrl.searchParams.get("before"));
+  const id = key.native;
   const ctx = await sessionContext(id);
   const run = getRun(id);
   const beforeParam = req.nextUrl.searchParams.get("before");
@@ -22,7 +28,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const page = ctx ? await readHistory(ctx.file) : { entries: [], cursor: null, end: 0 };
     return NextResponse.json({
       type: "history",
-      entries: page.entries,
+      entries: run ? [...page.entries, ...run.extras] : page.entries,
       cursor: page.cursor,
       end: page.end,
       terminal,

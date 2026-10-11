@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Xmark } from "iconoir-react";
 import "@xterm/xterm/css/xterm.css";
 
-export type TerminalTarget = { session?: string; cwd?: string; label: string };
+export type TerminalTarget = { session?: string; pid?: number; cwd?: string; label: string };
 
 /* keys phones don't have; sent as raw terminal sequences */
 const KEYS: [string, string][] = [
@@ -66,7 +66,8 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
       fit.fit();
 
       const q = new URLSearchParams({ cols: String(term.cols), rows: String(term.rows) });
-      if (target.session) q.set("session", target.session);
+      if (target.pid) q.set("pid", String(target.pid));
+      else if (target.session) q.set("session", target.session);
       if (target.cwd) q.set("cwd", target.cwd);
       const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/pty?${q}`);
       ws.binaryType = "arraybuffer";
@@ -106,7 +107,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
       disposed = true;
       cleanup();
     };
-  }, [target.session, target.cwd, attempt]);
+  }, [target.session, target.pid, target.cwd, attempt]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

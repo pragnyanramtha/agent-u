@@ -93,6 +93,11 @@ async function keys(target: InputTarget, line: string) {
   }
 }
 
+async function clearLine(target: InputTarget) {
+  if (target.kind === "zellij") await run("zellij", ["--session", target.session, "action", "write", "-p", target.pane, "21"]);
+  else await run("tmux", ["send-keys", "-t", target.pane, "C-u"]);
+}
+
 export class InputRefused extends Error {
   readonly code: string;
   constructor(message: string, code: string) {
@@ -106,11 +111,24 @@ export class InputRefused extends Error {
  * empty. Reports whether it looks queued (Claude busy) rather than taken.
  * Newlines become spaces: a real Enter submits in Claude's prompt.
  */
-export async function typeIntoTerminal(target: InputTarget, text: string) {
-  const before = readPrompt(await paneScreen(target, true));
+export async function typeIntoTerminal(target: InputTarget, text: string, { checkPrompt = true } = {}) {
+  if (!checkPrompt) {
+    await keys(target, text.replace(/[\r\n]+/g, " "));
+    return { queued: false, cleared: null as string | null };
+  }
+  let before = readPrompt(await paneScreen(target, true));
+  /* Claude's greyed next-turn suggestion and real half-typed text look the same in a screen dump,
+   * so clear the box (Ctrl+U, per line) and report what was there in case it was real. */
+  let cleared: string | null = null;
+  for (let i = 0; i < 4 && !before.ok && before.code === "has_text"; i++) {
+    cleared ??= before.text;
+    await clearLine(target);
+    await sleep(200);
+    before = readPrompt(await paneScreen(target, true));
+  }
   if (!before.ok) {
     if (before.code === "agent_focus") throw new InputRefused(`The terminal is focused on agent @${before.agent}, not this session. Switch it back to main in the terminal first.`, before.code);
-    if (before.code === "has_text") throw new InputRefused(`The terminal's prompt already has text in it ("${before.text.slice(0, 60)}"). Send or clear it in the terminal first.`, before.code);
+    if (before.code === "has_text") throw new InputRefused(`Couldn't clear the terminal's prompt ("${before.text.slice(0, 60)}"). Check the terminal view.`, before.code);
     throw new InputRefused("The terminal isn't showing Claude's prompt right now (a dialog or menu may be open). Check the terminal view.", before.code);
   }
   await keys(target, text.replace(/[\r\n]+/g, " "));
@@ -118,9 +136,9 @@ export async function typeIntoTerminal(target: InputTarget, text: string) {
   for (let i = 0; i < 4; i++) {
     await sleep(250);
     const after = readPrompt(await paneScreen(target, true));
-    if (after.ok || after.code !== "has_text") return { queued: false };
+    if (after.ok || after.code !== "has_text") return { queued: false, cleared };
   }
-  return { queued: true };
+  return { queued: true, cleared };
 }
 
 /* Single keys the web may press in a terminal pane: answering dialogs, interrupting, cycling mode. */

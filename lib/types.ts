@@ -29,8 +29,14 @@ export type TerminalInfo = {
   name: string | null;
 };
 
+/** Which coding agent a session belongs to. Plain session ids are Claude; others are "<agent>:<id>". */
+export type AgentId = "claude" | "codex" | "opencode" | "cursor" | "devin";
+
+export const AGENT_LABEL: Record<AgentId, string> = { claude: "Claude", codex: "Codex", opencode: "OpenCode", cursor: "Cursor", devin: "Devin" };
+
 export type SessionSummary = {
   id: string;
+  agent: AgentId;
   title: string;
   cwd: string;
   project: string;
@@ -71,6 +77,8 @@ export type RunState = {
   costUsd: number | null;
   /** set when the web run forked the transcript into a new session id */
   sessionId: string;
+  /** Claude's suggested next message, after a turn ends */
+  suggestion?: string | null;
 };
 
 export type StreamDelta = { msgId: string; index: number; kind: "text" | "thinking"; text: string };

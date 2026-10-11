@@ -3,6 +3,8 @@ import { parseMode, readJson, sessionContext, str } from "@/lib/server/http";
 import { InputRefused, inputTarget, typeIntoTerminal } from "@/lib/server/input";
 import { getRun, startRun } from "@/lib/server/runner";
 import { liveTerminals } from "@/lib/server/sessions";
+import { parseSessionKey } from "@/lib/server/agents";
+import { agentMessage } from "@/lib/server/agents/routes";
 
 export const dynamic = "force-dynamic";
 
@@ -15,8 +17,12 @@ export const dynamic = "force-dynamic";
  * There is never a second claude or a copy.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  const { id: raw } = await params;
   const body = await readJson(req);
+  const key = parseSessionKey(decodeURIComponent(raw));
+  if (!key) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  if (key.agent !== "claude") return agentMessage(key.agent, key.native, body);
+  const id = key.native;
   const text = str(body.text)?.trim();
   if (!text) return NextResponse.json({ error: "Message is empty." }, { status: 400 });
 
@@ -38,13 +44,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       );
     }
     let queued = false;
+    let cleared: string | null = null;
     try {
-      ({ queued } = await typeIntoTerminal(target, text));
+      ({ queued, cleared } = await typeIntoTerminal(target, text));
     } catch (err) {
       if (err instanceof InputRefused) return NextResponse.json({ error: err.message, code: err.code }, { status: 409 });
       return NextResponse.json({ error: `Couldn't type into the terminal: ${err instanceof Error ? err.message.slice(0, 160) : err}` }, { status: 502 });
     }
-    return NextResponse.json({ id, via: "terminal", queued });
+    return NextResponse.json({ id, via: "terminal", queued, cleared });
   }
 
   if (!ctx) return NextResponse.json({ error: "Session not found" }, { status: 404 });
