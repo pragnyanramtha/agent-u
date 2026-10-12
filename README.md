@@ -1,4 +1,4 @@
-# agent-u
+# agent-ui
 
 A self-hosted, mobile-friendly web UI for coding-agent sessions running on your own server: Claude Code, with
 adapters for Codex, OpenCode, Cursor CLI and Devin CLI.
