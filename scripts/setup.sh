@@ -21,7 +21,7 @@ step "Connecting to $DEPLOY_SSH"
 step "Checking the server"
 "${SSH[@]}" 'export PATH=$HOME/.local/bin:$HOME/.local/npm-global/bin:$HOME/.npm-global/bin:$HOME/.opencode/bin:$HOME/.kimi-code/bin:$HOME/.bun/bin:/usr/local/bin:$PATH
   miss=0
-  node -e "process.exit(+process.versions.node.split(\".\")[0] < 22)" 2>/dev/null && echo "ok   node $(node -v)" || { echo "MISSING node 22+ (24 recommended)"; miss=1; }
+  node -e "process.exit(parseInt(process.versions.node) < 22 ? 1 : 0)" 2>/dev/null && echo "ok   node $(node -v)" || { echo "MISSING node 22+ (24 recommended)"; miss=1; }
   command -v pnpm >/dev/null && echo "ok   pnpm" || { echo "MISSING pnpm (corepack enable pnpm, or npm i -g pnpm)"; miss=1; }
   command -v python3 >/dev/null && echo "ok   python3" || { echo "MISSING python3 (the web terminal needs it)"; miss=1; }
   command -v tmux >/dev/null && echo "ok   tmux" || echo "note tmux not found: agents started from the browser then stop when agent-u-pty restarts"
