@@ -60,6 +60,8 @@ const THEME = {
 };
 
 const SIZE_KEY = "cui:term-font";
+/* "#17181a" -> "rgb:1717/1818/1a1a", the form OSC 10/11 replies use */
+const oscColor = (hex: string) => `rgb:${[1, 3, 5].map((i) => hex.slice(i, i + 2).repeat(2)).join("/")}`;
 const NERD = '"Symbols Nerd Font Mono"';
 
 const ctrlOf = (ch: string) => {
@@ -90,6 +92,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
   closeRef.current = onClose;
   const [fontSize, setFontSize] = useState<number | null>(null);
   const [kind, setKind] = useState<string | null>(null);
+  const [output, setOutput] = useState(false);
   /* after a shell exits, "New shell" opens a fresh one in the same folder */
   const [fresh, setFresh] = useState(false);
   const tgt: TerminalTarget = fresh ? { cwd: target.cwd, label: target.label } : target;
@@ -97,6 +100,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
   useEffect(() => {
     let disposed = false;
     let cleanup = () => {};
+    setOutput(false);
     (async () => {
       const [{ Terminal }, { FitAddon }, { Unicode11Addon }, { WebLinksAddon }] = await Promise.all([
         import("@xterm/xterm"),
@@ -199,6 +203,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
             return;
           }
           const bytes = new Uint8Array(e.data as ArrayBuffer);
+          if (bytes.length) setOutput(true);
           received += bytes.length;
           term.write(bytes);
         };
@@ -221,6 +226,14 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
         if (ws?.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
         else if (!ended && pending.join("").length < 4096) pending.push(data);
       };
+      /* TUIs ask for the colors to pick tints that suit the background */
+      const osc = [10, 11].map((n) =>
+        term.parser.registerOscHandler(n, (data) => {
+          if (data !== "?") return false;
+          sendData(`\x1b]${n};${oscColor(n === 10 ? THEME.foreground : THEME.background)}\x1b\\`);
+          return true;
+        }),
+      );
       const onData = term.onData((data) => {
         const m = modRef.current;
         if (m && data.length === 1) {
@@ -265,6 +278,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
         ro.disconnect();
         onData.dispose();
         onResize.dispose();
+        osc.forEach((h) => h.dispose());
         ended = true;
         ws?.close(4000, "closed by viewer");
         term.dispose();
@@ -357,7 +371,10 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
           </button>
         </div>
         {reason && conn !== "open" && <p className={`shrink-0 px-3 py-1.5 text-[12px] ${conn === "ended" ? "bg-red/10 text-[#f2a7a7]" : "bg-orange/10 text-[#f2d398]"}`}>{reason}</p>}
-        <div ref={hostRef} className="min-h-0 flex-1 px-1.5 pt-1.5" />
+        <div className="relative min-h-0 flex-1">
+          <div ref={hostRef} className="absolute inset-0 px-1.5 pt-1.5" />
+          {!output && conn !== "ended" && <p className="pointer-events-none absolute inset-x-0 top-1/3 text-center font-mono text-[12px] text-[#6b7079]">{conn === "open" ? "Waiting for the terminal…" : "Connecting…"}</p>}
+        </div>
         <div className="no-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 px-2 py-1.5 lg:hidden" role="toolbar" aria-label="Terminal keys">
           <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => void paste()} className="h-8 shrink-0 rounded-[7px] bg-white/[0.06] px-2.5 font-mono text-[12px] text-[#c9ccd3] active:bg-white/15">
             Paste

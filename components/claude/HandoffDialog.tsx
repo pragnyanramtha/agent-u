@@ -97,7 +97,7 @@ export function HandoffDialog({
                   className="accent-[var(--color-ink)]"
                 />
                 <span className="min-w-0 flex-1 truncate text-ink">{p.label}</span>
-                <span className="shrink-0 text-[12px] text-ink-3">{p.id === p.agent ? "Default" : AGENT_LABEL[p.agent]}</span>
+                {p.id !== p.agent && <span className="shrink-0 text-[12px] text-ink-3">{AGENT_LABEL[p.agent]}</span>}
               </label>
             ))}
           </div>

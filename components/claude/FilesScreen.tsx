@@ -34,6 +34,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
   const [typed, setTyped] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const reqRef = useRef(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const open = useCallback(
     async (target?: string, opts: { hidden?: boolean } = {}) => {
@@ -66,6 +67,10 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
     void open(start || localStorage.getItem(PATH_KEY) || undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [start, startKey]);
+
+  useEffect(() => {
+    scrollRef.current?.querySelector("[data-selected]")?.scrollIntoView({ block: "nearest" });
+  }, [file?.path, listing?.path]);
 
   const dir = listing?.path ?? "";
   const refresh = () => void open(dir || undefined);
@@ -125,7 +130,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
   const now = Date.now();
   const list = (
     <div
-      className={`relative flex min-h-0 flex-1 flex-col ${file ? "max-md:hidden" : ""}`}
+      className={`relative flex min-h-0 min-w-0 flex-col ${file ? "max-md:hidden md:w-[min(40%,440px)] md:flex-none" : "flex-1"}`}
       onDragOver={(e) => {
         if (!e.dataTransfer.types.includes("Files")) return;
         e.preventDefault();
@@ -241,7 +246,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
         </p>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-6 sm:px-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-6 sm:px-3">
         {listing === null && !error ? (
           <p className="px-3 py-6 text-[13px] text-ink-3">Loading files…</p>
         ) : listing?.entries.length === 0 ? (
@@ -249,7 +254,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
         ) : (
           <ul className="flex flex-col">
             {listing?.entries.map((it) => (
-              <li key={it.path} className="group relative">
+              <li key={it.path} className="group relative" data-selected={file?.path === it.path || undefined}>
                 <button
                   type="button"
                   onClick={() => (it.type === "dir" ? void open(it.path) : void open(it.path))}
@@ -322,7 +327,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
       <div className="safe-x safe-bottom flex min-h-0 flex-1">
         {list}
         {file && (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col border-line md:max-w-[58%] md:border-l">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col border-line md:border-l">
             <Preview file={file} onClose={() => setFile(null)} onRename={() => rename({ path: file.path, name: file.path.split("/").pop() ?? "" })} onDelete={() => remove({ path: file.path, name: file.path.split("/").pop() ?? "" })} onSaved={refresh} />
           </div>
         )}

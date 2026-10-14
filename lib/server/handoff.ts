@@ -101,7 +101,6 @@ export async function handoff(src: Source, o: HandoffOptions): Promise<string> {
   if (target === "claude") {
     const id = await writeClaudeTranscript(src);
     const run = startRun({ resume: id, cwd: src.cwd, model: o.model, permissionMode: o.mode, profile: o.profile });
-    run.notice(`Continued from ${AGENT_LABEL[src.agent]} on ${o.profile.label}.`);
     run.send(o.text.trim() || "Continue where the previous session left off.");
     setSessionProfile(id, o.profile.id);
     return id;
