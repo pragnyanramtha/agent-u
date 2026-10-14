@@ -32,6 +32,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [drag, setDrag] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [menuUp, setMenuUp] = useState(false);
   const [typed, setTyped] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const reqRef = useRef(0);
@@ -68,6 +69,15 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
     void open(start || localStorage.getItem(PATH_KEY) || undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [start, startKey]);
+
+  useEffect(() => {
+    if (!menuFor) return;
+    const away = (e: PointerEvent) => {
+      if (!(e.target as Element).closest?.("[role=menu], [aria-expanded=true]")) setMenuFor(null);
+    };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [menuFor]);
 
   useEffect(() => {
     scrollRef.current?.querySelector("[data-selected]")?.scrollIntoView({ block: "center" });
@@ -272,7 +282,10 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMenuFor((m) => (m === it.path ? null : it.path))}
+                  onClick={(e) => {
+                    setMenuUp(window.innerHeight - e.currentTarget.getBoundingClientRect().bottom < 200);
+                    setMenuFor((m) => (m === it.path ? null : it.path));
+                  }}
                   aria-label={`Actions for ${it.name}`}
                   aria-expanded={menuFor === it.path}
                   className="absolute top-1/2 right-1 flex size-8 -translate-y-1/2 items-center justify-center rounded-[8px] text-ink-3 opacity-100 hover:bg-hover hover:text-ink sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
@@ -280,7 +293,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
                   <MoreHoriz width={16} height={16} />
                 </button>
                 {menuFor === it.path && (
-                  <div role="menu" className="absolute top-full right-1 z-30 w-48 rounded-[12px] bg-surface p-1 shadow-overlay" onMouseLeave={() => setMenuFor(null)}>
+                  <div role="menu" className={`absolute right-1 z-30 w-48 ${menuUp ? "bottom-full" : "top-full"} rounded-[12px] bg-surface p-1 shadow-overlay`} onMouseLeave={() => setMenuFor(null)}>
                     {it.type === "file" && (
                       <a role="menuitem" href={raw(it.path, true)} download={it.name} className="menu-item" onClick={() => setMenuFor(null)}>
                         <Download width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
