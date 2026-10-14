@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
 import { parseSessionKey, sessionKey } from "@/lib/server/agents";
@@ -47,6 +48,7 @@ export async function POST(req: NextRequest) {
     profile = pickProfile(k.agent, str(body.profile), key);
   }
   if (!profile) return NextResponse.json({ error: "Pick an agent profile." }, { status: 400 });
+  if (cwd === "~" || cwd.startsWith("~/")) cwd = path.join(os.homedir(), cwd.slice(1));
   if (!cwd || !path.isAbsolute(cwd) || !(await fs.stat(cwd).then((s) => s.isDirectory()).catch(() => false))) {
     return NextResponse.json({ error: `No folder at ${cwd || "(empty)"} on the server.` }, { status: 400 });
   }
