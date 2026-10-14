@@ -288,7 +288,7 @@ export function App() {
 
       {terminal && <WebTerminal target={terminal} onClose={() => setTerminal(null)} />}
       <OfflineBanner />
-      <CommandPalette sessions={sessions} activeId={sessionId} onOpen={openSession} onNew={newTab} onTheme={onTheme} />
+      <CommandPalette sessions={sessions} activeId={sessionId} onOpen={openSession} onNew={newTab} onView={openView} onTheme={onTheme} />
     </main>
   );
 }

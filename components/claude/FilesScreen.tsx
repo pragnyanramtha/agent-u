@@ -69,7 +69,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
   }, [start, startKey]);
 
   useEffect(() => {
-    scrollRef.current?.querySelector("[data-selected]")?.scrollIntoView({ block: "nearest" });
+    scrollRef.current?.querySelector("[data-selected]")?.scrollIntoView({ block: "center" });
   }, [file?.path, listing?.path]);
 
   const dir = listing?.path ?? "";

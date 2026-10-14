@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChatBubble, EditPencil, HalfMoon, LogOut, Search, SidebarCollapse, SunLight, Terminal, Xmark } from "iconoir-react";
+import { ChatBubble, EditPencil, Folder, HalfMoon, LogOut, Search, SidebarCollapse, SunLight, Terminal, Xmark } from "iconoir-react";
 import type { SessionSummary } from "@/lib/types";
 import { api, shortPath, timeAgo } from "@/lib/client/api";
 import { Pulse } from "./Pulse";
@@ -68,12 +68,15 @@ export function CommandPalette({
   activeId,
   onOpen,
   onNew,
+  onView,
   onTheme,
 }: {
   sessions: SessionSummary[] | null;
   activeId: string | null;
   onOpen: (id: string) => void;
   onNew: () => void;
+  /** opens the Agents or Files screen */
+  onView?: (tab: "@agents" | "@files") => void;
   /** called after the theme flips, so other theme controls can resync */
   onTheme?: (dark: boolean) => void;
 }) {
@@ -221,6 +224,32 @@ export function CommandPalette({
           window.dispatchEvent(new CustomEvent(OPEN_TERMINAL_EVENT, { detail: { cwd: s?.cwd || undefined, label: s?.cwd ? `shell in ${s.cwd}` : "shell" } }));
         },
       },
+      ...(onView
+        ? [
+            {
+              id: "a:agents",
+              group: "Actions" as const,
+              label: "Agents and terminals",
+              keywords: "agents terminals launch run server profiles accounts proxy tmux",
+              icon: <Terminal width={15} height={15} strokeWidth={1.8} />,
+              run: () => {
+                navigated.current = true;
+                onView("@agents");
+              },
+            },
+            {
+              id: "a:files",
+              group: "Actions" as const,
+              label: "Files",
+              keywords: "files folder browse upload download artifacts explorer",
+              icon: <Folder width={15} height={15} strokeWidth={1.8} />,
+              run: () => {
+                navigated.current = true;
+                onView("@files");
+              },
+            },
+          ]
+        : []),
       {
         id: "a:sidebar",
         group: "Actions",
@@ -255,7 +284,7 @@ export function CommandPalette({
     ];
     const actionItems = words.length ? actions.filter((a) => words.every((w) => score(`${a.label} ${a.keywords}`, w) >= 60)) : actions;
     return [...sessionItems, ...actionItems];
-  }, [query, sessions, activeId, dark, onOpen, onNew, toggleTheme]);
+  }, [query, sessions, activeId, dark, onOpen, onNew, onView, toggleTheme]);
 
   /* a new query starts back at the top */
   useEffect(() => {

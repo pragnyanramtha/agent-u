@@ -88,6 +88,7 @@ export function SessionScreen({
   const agentName = AGENT_LABEL[agent];
   const profileId = localProfile ?? view.profile ?? agent;
   const profileInfo = profiles?.find((p) => p.id === profileId);
+  const runsOn = profileInfo && profileInfo.id !== agent ? profileInfo.label : agent !== "claude" ? agentName : null;
   const changes = useMemo(() => collectChanges(view.entries, view.results), [view.entries, view.results]);
   const cost = useMemo(() => sessionCost(view.entries, view.run), [view.entries, view.run]);
   const usage = useMemo(() => {
@@ -276,12 +277,12 @@ export function SessionScreen({
             <h1 className="min-w-0 truncate text-[15px] font-medium tracking-[-0.01em] text-ink sm:text-[14.5px]" title={view.title || undefined}>
               {view.title || (view.status === "missing" ? "Couldn’t load this session" : "Loading session…")}
             </h1>
-            {(view.cwd || agent !== "claude") && (
+            {(view.cwd || runsOn) && (
               <p className="flex min-w-0 shrink-[3] items-center gap-1.5 text-[12px] text-ink-3 sm:text-[13px]" title={view.cwd || undefined}>
-                {agent !== "claude" && (
+                {runsOn && (
                   <>
                     <AgentMark agent={agent} />
-                    <span className="shrink-0">{agentName}</span>
+                    <span className="shrink-0">{runsOn}</span>
                     {view.cwd && <span aria-hidden>·</span>}
                   </>
                 )}

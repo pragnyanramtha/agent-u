@@ -136,7 +136,7 @@ export function parseRecord(rec: Rec): Entry[] {
     if (synthetic && rec.isApiErrorMessage) {
       const said = content.map((b) => (b.type === "text" ? b.text ?? "" : "")).join(" ").trim();
       const auth = rec.error === "authentication_failed" || /authenticat|log ?in|oauth/i.test(said);
-      return [{ kind: "notice", id: base, ts, tone: "warn", text: auth ? `${said || "Claude couldn't sign in."} Log in again on the server: run claude, then /login.` : said || "The API returned an error." }];
+      return [{ kind: "notice", id: base, ts, tone: "warn", text: auth ? `${said ? said.replace(/[^.!?]$/, "$&.") : "Claude couldn't sign in."} Log in again on the server: run claude, then /login.` : said || "The API returned an error." }];
     }
     /* the acknowledgement written after an imported session's preamble */
     if (synthetic && msgId.startsWith("msg_import_") && content.length === 1 && content[0].text === "Understood.") return [];

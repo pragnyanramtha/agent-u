@@ -17,8 +17,8 @@ export function OfflineBanner() {
   }, []);
   if (!offline) return null;
   return (
-    <div role="status" className="safe-top fixed inset-x-0 top-0 z-[60] flex justify-center px-3 pt-2 pointer-events-none">
-      <p className="pointer-events-auto rounded-full bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-page shadow-overlay">
+    <div role="status" className="safe-top pointer-events-none fixed inset-x-0 top-14 z-[60] flex justify-center px-3 pt-1 lg:top-[52px]">
+      <p className="pointer-events-auto max-w-md rounded-[12px] bg-ink px-3.5 py-1.5 text-center text-[12.5px] font-medium text-page shadow-overlay">
         Offline. Agents keep running on the server; messages send when you&apos;re back.
       </p>
     </div>
