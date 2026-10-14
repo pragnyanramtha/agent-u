@@ -75,6 +75,8 @@ function userString(rec: Rec, text: string, id: string, ts: string): Entry[] {
   if (bash) return [{ kind: "user", id, ts, text: `! ${bash}`, images: 0 }];
   if (text.startsWith("[Request interrupted by user")) return [{ kind: "notice", id, ts, tone: "warn", text: "Interrupted" }];
   if (/^<(task-notification|local-command-caveat|user-memory-input)>/.test(text) || rec.isCompactSummary) return [];
+  const imported = text.startsWith("<imported-session>") ? tag(text, "imported-session") : null;
+  if (imported !== null) return [{ kind: "notice", id, ts, tone: "info", text: imported.trim() }];
   const clean = text.replace(SYSTEM_REMINDER, "").trim();
   return clean ? [{ kind: "user", id, ts, text: clean, images: 0 }] : [];
 }
@@ -125,8 +127,11 @@ export function parseRecord(rec: Rec): Entry[] {
   if (rec.type === "assistant" && Array.isArray(content)) {
     const msgId = rec.message?.id ?? base;
     const u = rec.message?.usage;
+    const synthetic = rec.message?.model === "<synthetic>";
+    /* the acknowledgement written after an imported session's preamble */
+    if (synthetic && msgId.startsWith("msg_import_") && content.length === 1 && content[0].text === "Understood.") return [];
     /* one usage entry per API message: every block's record repeats it, and the shared id dedupes */
-    const usage: Entry[] = u
+    const usage: Entry[] = u && !synthetic
       ? [{ kind: "usage", id: `${msgId}:usage`, ts, model: rec.message?.model ?? "", input: u.input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0, output: u.output_tokens ?? 0 }]
       : [];
     return usage.concat(content.flatMap((block, i): Entry[] => {
