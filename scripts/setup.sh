@@ -87,7 +87,8 @@ if [ -n "${TUNNEL_NAME:-}" ] && [ -n "${PUBLIC_HOSTNAME:-}" ]; then
   "${SSH[@]}" "TUNNEL='$TUNNEL_NAME' HOST='$PUBLIC_HOSTNAME' bash -s" <<'REMOTE' || echo "Tunnel not set up yet; see Server setup step 3 in AGENTS.md, then run this again."
 set -euo pipefail
 command -v cloudflared >/dev/null || { echo "cloudflared is not installed"; exit 1; }
-id=$(cloudflared tunnel list -o json 2>/dev/null | python3 -c 'import json,sys,os; t=[x for x in json.load(sys.stdin) if x["name"]==os.environ["TUNNEL"]]; print(t[0]["id"] if t else "")' || true)
+id=$(cloudflared tunnel list -o json 2>/dev/null | python3 -c 'import json,sys,os; t=[x for x in json.load(sys.stdin) if x["name"]==os.environ["TUNNEL"]]; print(t[0]["id"] if t else "")' 2>/dev/null || true)
+if [ -z "$id" ] && [ -f "$HOME/.cloudflared/agent-u.yml" ]; then echo "Keeping the existing ~/.cloudflared/agent-u.yml (no cloudflared login here to look tunnels up)"; exit 0; fi
 [ -n "$id" ] || { echo "No tunnel named $TUNNEL (needs cloudflared tunnel login + create, which open a browser)"; exit 1; }
 [ -f "$HOME/.cloudflared/$id.json" ] || { echo "Missing credentials ~/.cloudflared/$id.json"; exit 1; }
 cat > "$HOME/.cloudflared/agent-u.yml" <<EOF
