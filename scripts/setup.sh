@@ -114,11 +114,12 @@ fi
 
 step "Agent logins"
 "${SSH[@]}" 'export PATH=$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.kimi-code/bin:$PATH
-  [ -d ~/.claude ] && ls ~/.claude/.credentials.json >/dev/null 2>&1 && echo "claude: logged in" || { command -v claude >/dev/null && echo "claude: run claude, then /login"; }
-  command -v codex >/dev/null && { codex login status >/dev/null 2>&1 && echo "codex: logged in" || echo "codex: run codex login"; }
+  [ -d ~/.claude ] && ls ~/.claude/.credentials.json >/dev/null 2>&1 && echo "claude: credentials found" || { command -v claude >/dev/null && echo "claude: run claude, then /login"; }
+  command -v codex >/dev/null && { codex login status >/dev/null 2>&1 && echo "codex: credentials found" || echo "codex: run codex login"; }
   command -v opencode >/dev/null && echo "opencode: opencode auth login if not done"
-  command -v cursor-agent >/dev/null && { cursor-agent status 2>/dev/null | grep -qi "logged in" && echo "cursor: logged in" || echo "cursor: run cursor-agent login"; }
+  command -v cursor-agent >/dev/null && { cursor-agent status 2>/dev/null | grep -qi "logged in" && echo "cursor: credentials found" || echo "cursor: run cursor-agent login"; }
   command -v kimi >/dev/null && echo "kimi: run kimi, then /login if not done"
   true'
 echo
+echo "Found credentials can still be expired: if a turn says the login or token expired, log in again on the server."
 echo "Done. Logins happen on the server: over ssh, or in the browser under Agents and terminals > Shell."
