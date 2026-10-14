@@ -1,5 +1,6 @@
 "use client";
 
+import { confirmAsk, promptAsk } from "./Ask";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Copy, Download, EditPencil, Eye, EyeClosed, Folder, FolderPlus, Menu, MoreHoriz, NavArrowLeft, NavArrowUp, OpenNewWindow, Page, Refresh, Trash, Upload, Xmark } from "iconoir-react";
 import { api, ApiError, shortPath, timeAgo } from "@/lib/client/api";
@@ -84,7 +85,7 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
       try {
         let replace = false;
         if (listing?.entries.some((e) => e.name === f.name)) {
-          if (!window.confirm(`${f.name} already exists here. Replace it?`)) {
+          if (!(await confirmAsk({ title: `Replace ${f.name}?`, body: "A file with this name is already in the folder.", confirm: "Replace" }))) {
             setUploads((u) => u.filter((x) => x.id !== id));
             continue;
           }
@@ -109,16 +110,17 @@ export function FilesScreen({ onMenu, extra, start, startKey }: { onMenu: () => 
       setError(err instanceof ApiError ? err.message : "Couldn't reach the server.");
     }
   };
-  const mkdir = () => {
-    const name = window.prompt("New folder name");
+  const mkdir = async () => {
+    const name = await promptAsk({ title: "New folder", body: `In ${shortPath(dir)}`, confirm: "Create" });
     if (name) void act({ action: "mkdir", path: dir, name });
   };
-  const rename = (it: { path: string; name: string }) => {
-    const name = window.prompt("Rename to", it.name);
+  const rename = async (it: { path: string; name: string }) => {
+    const name = await promptAsk({ title: `Rename ${it.name}`, confirm: "Rename", value: it.name });
     if (name && name !== it.name) void act({ action: "rename", path: it.path, name }, () => file?.path === it.path && setFile(null));
   };
-  const remove = (it: { path: string; name: string; type?: string }) => {
-    if (window.confirm(`Delete ${it.name}${it.type === "dir" ? " and everything in it" : ""}? This can't be undone.`)) void act({ action: "delete", path: it.path }, () => file?.path === it.path && setFile(null));
+  const remove = async (it: { path: string; name: string; type?: string }) => {
+    const ok = await confirmAsk({ title: `Delete ${it.name}?`, body: `${it.type === "dir" ? "The folder and everything in it are" : "It is"} removed from the server. This can't be undone.`, confirm: "Delete", danger: true });
+    if (ok) void act({ action: "delete", path: it.path }, () => file?.path === it.path && setFile(null));
   };
 
   const crumbs = useMemo(() => {

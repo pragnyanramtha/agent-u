@@ -1,5 +1,6 @@
 "use client";
 
+import { confirmAsk, promptAsk } from "./Ask";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Menu, Plus, Terminal, Trash } from "iconoir-react";
 import { AGENT_IDS, AGENT_LABEL, type AgentId, type ProfileInfo, type ServerTerminal } from "@/lib/types";
@@ -149,7 +150,7 @@ function Terminals({ onOpenSession }: { onOpenSession: (id: string) => void }) {
   }, [load]);
 
   const stop = async (t: ServerTerminal) => {
-    if (!t.exited && !window.confirm(`Stop ${t.label}? Whatever runs in it is ended.`)) return;
+    if (!t.exited && !(await confirmAsk({ title: `Stop ${t.label}?`, body: "Whatever runs in it is ended. The session's history stays.", confirm: "Stop", danger: true }))) return;
     await fetch("/api/terminals", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: t.id }) });
     void load();
   };
@@ -264,8 +265,9 @@ function Profiles() {
     if (edit.isNew && (profiles ?? []).some((x) => x.id === p.id && !x.builtin)) return setError(`There's already a profile called ${p.id}.`);
     void save([...rest, p]);
   };
-  const reset = (p: ProfileInfo) => {
-    if (!window.confirm(p.builtin ? `Reset ${p.label} to its defaults?` : `Delete the ${p.label} profile?`)) return;
+  const reset = async (p: ProfileInfo) => {
+    const ok = await confirmAsk(p.builtin ? { title: `Reset ${p.label}?`, body: "Your changes to this built-in profile are dropped.", confirm: "Reset" } : { title: `Delete ${p.label}?`, body: "Sessions that used it go back to the built-in profile.", confirm: "Delete", danger: true });
+    if (!ok) return;
     void save(custom.filter((c) => c.id !== p.id).map(stored));
   };
 

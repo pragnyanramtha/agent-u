@@ -1,5 +1,6 @@
 "use client";
 
+import { AskHost } from "./Ask";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSessions } from "@/lib/client/useSessions";
 import { CommandPalette, OPEN_TERMINAL_EVENT, TOGGLE_SIDEBAR_EVENT } from "./CommandPalette";
@@ -289,6 +290,7 @@ export function App() {
       {terminal && <WebTerminal target={terminal} onClose={() => setTerminal(null)} />}
       <OfflineBanner />
       <CommandPalette sessions={sessions} activeId={sessionId} onOpen={openSession} onNew={newTab} onView={openView} onTheme={onTheme} />
+      <AskHost />
     </main>
   );
 }

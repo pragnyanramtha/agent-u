@@ -284,8 +284,10 @@ export function CommandPalette({
     ];
     const actionItems = words.length ? actions.filter((a) => words.every((w) => score(`${a.label} ${a.keywords}`, w) >= 60)) : actions;
     /* "fil" means the Files action more than a session that mentions files */
-    const actionsFirst = words.length > 0 && actionItems.some((a) => a.label.toLowerCase().startsWith(words.join(" ")));
-    return actionsFirst ? [...actionItems, ...sessionItems] : [...sessionItems, ...actionItems];
+    const typed = words.join(" ");
+    const prefix = (a: Item) => (typed && a.label.toLowerCase().startsWith(typed) ? 0 : 1);
+    const ranked = [...actionItems].sort((a, b) => prefix(a) - prefix(b));
+    return ranked.length && prefix(ranked[0]) === 0 ? [...ranked, ...sessionItems] : [...sessionItems, ...ranked];
   }, [query, sessions, activeId, dark, onOpen, onNew, onView, toggleTheme]);
 
   /* a new query starts back at the top */
