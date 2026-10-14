@@ -11,6 +11,8 @@ export function useSessions(intervalMs = 5000) {
   const [data, setData] = useState<Listing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef(false);
+  const fails = useRef(0);
+  const loaded = useRef(false);
 
   const refresh = useCallback(async () => {
     if (inflight.current) return;
@@ -18,8 +20,12 @@ export function useSessions(intervalMs = 5000) {
     try {
       setData(await api<Listing>("/api/sessions"));
       setError(null);
+      fails.current = 0;
+      loaded.current = true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      /* a list on screen outlives short drops; the offline banner covers no network at all */
+      fails.current += 1;
+      if (navigator.onLine && (fails.current >= 3 || !loaded.current)) setError(err instanceof Error ? err.message : String(err));
     } finally {
       inflight.current = false;
     }
@@ -35,10 +41,13 @@ export function useSessions(intervalMs = 5000) {
         timer = setInterval(refresh, intervalMs);
       }
     };
+    const onOnline = () => void refresh();
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
     };
   }, [refresh, intervalMs]);
 

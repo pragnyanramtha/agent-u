@@ -283,7 +283,9 @@ export function CommandPalette({
       },
     ];
     const actionItems = words.length ? actions.filter((a) => words.every((w) => score(`${a.label} ${a.keywords}`, w) >= 60)) : actions;
-    return [...sessionItems, ...actionItems];
+    /* "fil" means the Files action more than a session that mentions files */
+    const actionsFirst = words.length > 0 && actionItems.some((a) => a.label.toLowerCase().startsWith(words.join(" ")));
+    return actionsFirst ? [...actionItems, ...sessionItems] : [...sessionItems, ...actionItems];
   }, [query, sessions, activeId, dark, onOpen, onNew, onView, toggleTheme]);
 
   /* a new query starts back at the top */
@@ -355,7 +357,7 @@ export function CommandPalette({
 
   if (!open) return null;
 
-  const groups = (["Sessions", "Actions"] as const)
+  const groups = [...new Set(items.map((it) => it.group))]
     .map((g) => ({ g, rows: items.map((it, i) => ({ it, i })).filter((x) => x.it.group === g) }))
     .filter((x) => x.rows.length);
   const loading = sessions === null;
