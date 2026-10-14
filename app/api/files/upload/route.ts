@@ -1,0 +1,53 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { NextResponse, type NextRequest } from "next/server";
+import { FsError, fsFail, real, safeName } from "@/lib/server/files";
+import { guard } from "@/lib/guard";
+
+export const dynamic = "force-dynamic";
+
+const CHUNK_MAX = 9 * 1024 * 1024;
+
+/**
+ * Resumable upload in chunks: POST ?dir=<abs>&name=<file>&offset=<n>&total=<bytes>&key=<id>[&replace=1] with the raw bytes.
+ * The partial file is kept next to the target; an offset that doesn't match what's there gets a 409 with
+ * the size received so far, so a client that lost its connection carries on from there.
+ * An empty POST at offset 0 asks for that size. The last chunk moves the file into place.
+ */
+export async function POST(req: NextRequest) {
+  const denied = await guard(req);
+  if (denied) return denied;
+  const q = req.nextUrl.searchParams;
+  const dirParam = q.get("dir");
+  try {
+    const dir = await real(dirParam);
+    if (!(await fs.stat(dir)).isDirectory()) throw new FsError(`${dir} isn't a folder.`, 400);
+    const name = safeName(q.get("name"));
+    const total = Number(q.get("total"));
+    const offset = Number(q.get("offset") ?? 0);
+    if (!Number.isSafeInteger(total) || total < 0 || !Number.isSafeInteger(offset) || offset < 0 || offset > total) throw new FsError("Bad offset or size.", 400);
+    const target = path.join(dir, name);
+    /* the client's key (size and modified time) keeps a different file of the same name from resuming this one */
+    const key = (q.get("key") ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+    const part = path.join(dir, `.${name}.${key || total}.agentu-upload`);
+    if (q.get("replace") !== "1" && (await fs.stat(target).then(() => true).catch(() => false))) {
+      return NextResponse.json({ error: `${name} already exists in ${dir}.`, code: "exists" }, { status: 409 });
+    }
+
+    const have = await fs.stat(part).then((s) => s.size).catch(() => 0);
+    const body = Buffer.from(await req.arrayBuffer());
+    if (body.length > CHUNK_MAX) throw new FsError("Chunk too large.", 413);
+    if (offset !== have) return NextResponse.json({ error: "Out of step", code: "offset", received: have }, { status: 409 });
+    if (offset + body.length > total) throw new FsError("More bytes than the file's size.", 400);
+
+    if (body.length || offset === 0) await fs.appendFile(part, body, { mode: 0o644 });
+    const received = offset + body.length;
+    if (received === total) {
+      await fs.rename(part, target);
+      return NextResponse.json({ done: true, path: target, received });
+    }
+    return NextResponse.json({ done: false, received });
+  } catch (err) {
+    return fsFail(err, dirParam ?? "");
+  }
+}

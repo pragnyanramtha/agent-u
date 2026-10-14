@@ -83,7 +83,7 @@ export function TerminalPeek({ id, pid, where, onClose }: { id: string; pid?: nu
         <button
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent(OPEN_TERMINAL_EVENT, { detail: { session: id, pid, label: where } }))}
-          className="tap relative ml-auto shrink-0 rounded-full bg-surface px-2.5 py-1 text-[11.5px] font-medium text-ink shadow-hairline hover:bg-hover"
+          className="tap relative ml-auto shrink-0 rounded-full bg-ink px-3 py-1 text-[11.5px] font-medium text-page hover:opacity-90"
         >
           Open interactive
         </button>

@@ -6,6 +6,7 @@ import type { Entry, ToolResult } from "@/lib/types";
 import { lineDiff } from "@/lib/client/diff";
 import { DiffBlock } from "./DiffBlock";
 import { PathLabel } from "./PathLabel";
+import { OPEN_FILES_EVENT } from "./FilesScreen";
 
 type Edit = { before: string; after: string; ts: string; kind: "edit" | "write"; failed: boolean };
 export type FileChange = { path: string; edits: Edit[]; added: number; removed: number; last: string };
@@ -105,6 +106,15 @@ export function ChangesPanel({ changes, cwd, partial, onClose }: { changes: File
                 </button>
                 {expanded && (
                   <div className="flex flex-col gap-2 px-1 pt-1 pb-3">
+                    {f.path.startsWith("/") && (
+                      <button
+                        type="button"
+                        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_FILES_EVENT, { detail: { path: f.path } }))}
+                        className="self-start rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-2 shadow-btn hover:bg-hover"
+                      >
+                        Open the file as it is now
+                      </button>
+                    )}
                     {f.edits.map((ed, i) => (
                       <div key={i} className={ed.failed ? "opacity-50" : ""}>
                         {ed.failed && <p className="mb-1 text-[11.5px] text-red-ink">This edit failed and wasn&apos;t applied.</p>}

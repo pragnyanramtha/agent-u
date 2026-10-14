@@ -5,6 +5,9 @@ import { getRun, startRun } from "@/lib/server/runner";
 import { liveTerminals } from "@/lib/server/sessions";
 import { parseSessionKey } from "@/lib/server/agents";
 import { agentMessage } from "@/lib/server/agents/routes";
+import { once } from "@/lib/server/dedupe";
+import { guardTurn, sameStore } from "@/lib/server/fallback";
+import { pickProfile, setSessionProfile } from "@/lib/server/profiles";
 
 export const dynamic = "force-dynamic";
 
@@ -21,14 +24,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const body = await readJson(req);
   const key = parseSessionKey(decodeURIComponent(raw));
   if (!key) return NextResponse.json({ error: "Session not found" }, { status: 404 });
-  if (key.agent !== "claude") return agentMessage(key.agent, key.native, body);
-  const id = key.native;
+  if (key.agent !== "claude") return once(body.clientId, () => agentMessage(key.agent, key.native, body));
+  return once(body.clientId, () => claudeMessage(key.native, body));
+}
+
+async function claudeMessage(id: string, body: Record<string, unknown>) {
   const text = str(body.text)?.trim();
   if (!text) return NextResponse.json({ error: "Message is empty." }, { status: 400 });
+  const before = pickProfile("claude", null, id);
+  const profile = pickProfile("claude", body.profile, id);
+  if (!sameStore(before, profile)) {
+    return NextResponse.json({ error: `${profile.label} keeps its sessions elsewhere. Use "Continue in" to move this session there.`, code: "other_store" }, { status: 409 });
+  }
+  const model = str(body.model) || undefined;
 
-  const existing = getRun(id);
+  let existing = getRun(id);
+  /* another account or proxy: the next turn runs in a new process on the same transcript */
+  if (existing && (existing.profile?.id ?? "claude") !== profile.id && existing.state.status !== "running" && !existing.state.pending.length) {
+    existing.close();
+    existing = null;
+  }
   if (existing) {
     existing.send(text);
+    guardTurn({ key: id, text, mode: existing.state.permissionMode, model, profile: existing.profile ?? profile });
     return NextResponse.json({ id: existing.state.sessionId, via: "web" });
   }
 
@@ -62,12 +80,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ id: raced.state.sessionId, via: "web" });
   }
 
-  const run = startRun({
-    resume: id,
-    cwd: ctx.cwd,
-    model: str(body.model) || undefined,
-    permissionMode: parseMode(body.permissionMode) ?? parseMode(ctx.meta.permissionMode) ?? "default",
-  });
+  const mode = parseMode(body.permissionMode) ?? parseMode(ctx.meta.permissionMode) ?? "default";
+  const run = startRun({ resume: id, cwd: ctx.cwd, model, permissionMode: mode, profile });
   run.send(text);
+  setSessionProfile(id, profile.id);
+  guardTurn({ key: id, text, mode, model, profile });
   return NextResponse.json({ id, via: "web" });
 }

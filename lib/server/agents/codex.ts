@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { Entry, PermissionMode } from "@/lib/types";
 import { rekeyTurn, startTurn, stopTurn, turnState } from "./cli-run";
+import { profileBin } from "../profiles";
+import { responsesItems, type Source } from "../handoff-shape";
 import { appServerTurn } from "./codex-app";
 import { allRollouts, fileMeta, findRollout, idOfRollout, readRecords, tailRollout, threadNames, type FileMeta } from "./codex-files";
 import { errorText, parseLines, safeParse } from "./codex-parse";
@@ -180,7 +182,7 @@ function trackErrors(run: Run) {
 }
 
 async function requireBinary() {
-  const bin = await binary();
+  const bin = await profileBin(binary);
   if (!bin) throw new Error("Codex CLI isn't installed (no `codex` on PATH or in ~/.local/bin).");
   return bin;
 }
@@ -237,7 +239,7 @@ async function start(opts: { cwd: string; text: string; model?: string; mode: Pe
 }
 
 /** New session over the app server; resolves once the thread exists (before the model answers). */
-function startApp(bin: string, opts: { cwd: string; text: string; model?: string; mode: PermissionMode }): Promise<{ id: string }> {
+function startApp(bin: string, opts: { cwd: string; text: string; model?: string; mode: PermissionMode }, inject?: unknown[]): Promise<{ id: string }> {
   const pending = key(`pending-${randomUUID()}`);
   return new Promise((resolve, reject) => {
     let id: string | null = null;
@@ -251,6 +253,7 @@ function startApp(bin: string, opts: { cwd: string; text: string; model?: string
         text: opts.text,
         model: opts.model,
         mode: opts.mode,
+        inject,
         onThread: (thread) => {
           if (id) return;
           id = thread;
@@ -299,6 +302,12 @@ async function send(id: string, text: string, opts: { model?: string; mode: Perm
   lineHandler = trackErrors(run);
 }
 
+/** A new thread with another agent's conversation injected as its history, then the first turn. */
+async function importStart(opts: { cwd: string; text: string; model?: string; mode: PermissionMode }, src: Source): Promise<{ id: string }> {
+  const bin = await requireBinary();
+  return startApp(bin, opts, responsesItems(src));
+}
+
 const adapter: AgentAdapter = {
   id: "codex",
   label: "Codex",
@@ -309,6 +318,7 @@ const adapter: AgentAdapter = {
   watch: watchSession,
   liveProcesses,
   start,
+  importStart,
   send,
   runState: (id) => turnState(key(id)),
   stop: async (id) => stopTurn(key(id)),

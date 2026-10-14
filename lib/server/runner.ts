@@ -4,6 +4,20 @@ import type { Entry, PendingAsk, PermissionMode, Question, RunState, StreamDelta
 
 const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
 import { CLAUDE_BIN, IDLE_REAP_MS } from "./config";
+import type { ResolvedProfile } from "./profiles";
+
+/** "--flag value" / "--flag" pairs as the SDK's extraArgs */
+function extraArgs(args: string[]): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].startsWith("--")) continue;
+    const [k, v] = args[i].slice(2).split(/=(.*)/s);
+    if (v !== undefined) out[k] = v;
+    else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--")) out[k] = args[++i];
+    else out[k] = null;
+  }
+  return out;
+}
 
 /* A web run drives one `claude` process through the Agent SDK in streaming
  * input mode, so a session can take many messages without respawning. The
@@ -58,6 +72,11 @@ export class Run {
   private q: Query;
   private inbox = new Inbox();
   private listeners = new Set<(e: RunEvent) => void>();
+  /** server-side watchers (fallback); unlike viewers they don't keep an idle run alive */
+  private observers = new Set<(e: RunEvent) => void>();
+  readonly profile: ResolvedProfile | null;
+  /** the last message sent, so a failed turn can be retried elsewhere */
+  lastText = "";
   private decisions = new Map<string, { resolve: (d: Decision) => void; ask: PendingAsk; input: Record<string, unknown>; suggestions?: unknown[] }>();
   private blockKinds = new Map<number, "text" | "thinking">();
   private msgId = "";
@@ -69,11 +88,14 @@ export class Run {
 
   readonly cwd: string;
 
-  constructor(opts: { resume?: string; fork?: boolean; cwd: string; model?: string; permissionMode: PermissionMode }) {
+  constructor(opts: { resume?: string; fork?: boolean; cwd: string; model?: string; permissionMode: PermissionMode; profile?: ResolvedProfile | null }) {
     this.cwd = opts.cwd;
+    this.profile = opts.profile ?? null;
+    const p = this.profile;
+    const model = opts.model ?? p?.defaultModel;
     this.state = {
       status: "starting",
-      model: opts.model ?? null,
+      model: model ?? null,
       permissionMode: opts.permissionMode,
       slashCommands: [],
       pending: [],
@@ -88,14 +110,16 @@ export class Run {
         cwd: opts.cwd,
         resume: opts.resume,
         forkSession: opts.fork,
-        model: opts.model,
+        model,
         permissionMode: opts.permissionMode,
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
         promptSuggestions: true,
         settingSources: ["user", "project", "local"],
         systemPrompt: { type: "preset", preset: "claude_code" },
-        pathToClaudeCodeExecutable: CLAUDE_BIN,
+        pathToClaudeCodeExecutable: (p?.bin ? p.binPath : null) ?? CLAUDE_BIN,
+        ...(p && Object.keys(p.env).length ? { env: { ...process.env, ...p.env } } : {}),
+        ...(p?.args.length ? { extraArgs: extraArgs(p.args) } : {}),
         canUseTool: this.canUseTool,
         stderr: (data) => process.stderr.write(`[claude ${this.state.sessionId.slice(0, 8)}] ${data}`),
       },
@@ -114,6 +138,7 @@ export class Run {
 
   send(text: string) {
     if (this.ended) return;
+    this.lastText = text;
     this.inbox.push({
       type: "user",
       message: { role: "user", content: text },
@@ -129,6 +154,16 @@ export class Run {
       this.listeners.delete(fn);
       this.scheduleReap();
     };
+  }
+
+  observe(fn: (e: RunEvent) => void) {
+    this.observers.add(fn);
+    return () => void this.observers.delete(fn);
+  }
+
+  /** A line in the thread that isn't in the transcript (e.g. "continuing on another profile"). */
+  notice(text: string, tone: "info" | "warn" = "info") {
+    this.extra({ kind: "notice", id: randomUUID(), ts: new Date().toISOString(), tone, text });
   }
 
   respond(requestId: string, decision: Decision) {
@@ -174,6 +209,7 @@ export class Run {
 
   private emit(e: RunEvent) {
     this.listeners.forEach((fn) => fn(e));
+    this.observers.forEach((fn) => fn(e));
   }
 
   /** Entries only this run knows (kept for viewers who connect later; the newest 50). */

@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 /** The tab id for the new-session screen. There is at most one. */
 export const NEW_TAB = "new";
+/** tabs that show a tool instead of a session */
+export const FILES_TAB = "@files";
+export const AGENTS_TAB = "@agents";
+export const VIEW_TABS: Record<string, string> = { [FILES_TAB]: "Files", [AGENTS_TAB]: "Agents" };
 
 /** An open tab: a session id (or NEW_TAB) plus the last title we saw, so reloads paint names before the list loads. */
 export type Tab = { id: string; title?: string };

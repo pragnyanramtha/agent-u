@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type { StreamDelta } from "@/lib/types";
+import { activeProfile } from "../profiles";
 import type { CliRunState } from "./types";
 
 /* Web-driven turns for CLI agents: each send/start spawns the agent's
@@ -59,9 +60,11 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
   const existing = runs.get(key);
   if (existing?.state.status === "running") throw new Error("A turn is already running for this session.");
   const piped = spec.keepStdin || spec.stdin !== undefined;
-  const child = spawn(spec.cmd, spec.args, {
+  /* a profile (another backend, an API key, a proxy) adds its global flags and environment */
+  const profile = activeProfile();
+  const child = spawn(spec.cmd, [...(profile?.args ?? []), ...spec.args], {
     cwd: spec.cwd,
-    env: { ...process.env, ...spec.env },
+    env: { ...process.env, ...spec.env, ...profile?.env },
     stdio: [piped ? "pipe" : "ignore", "pipe", "pipe"],
     detached: false,
   });

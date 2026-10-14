@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Entry } from "@/lib/types";
 import { liveStream, rekeyTurn, startTurn, stopTurn, turnState, type Run } from "./cli-run";
+import { activeProfile, profileBin } from "../profiles";
 import { changedSince, getSession, historyPage, listSessions, sessionEnd, sessionsSince } from "./opencode-store";
 import type { AgentAdapter, AgentSession, CliRunState, SendOptions, StartOptions } from "./types";
 
@@ -107,9 +108,10 @@ async function startServe(bin: string, cwd: string): Promise<Serve | null> {
   try {
     const port = await freePort();
     const password = randomBytes(24).toString("base64url");
-    const child = spawn(bin, ["serve", "--port", String(port), "--hostname", "127.0.0.1", "--print-logs", "--log-level", "ERROR"], {
+    const profile = activeProfile();
+    const child = spawn(bin, [...(profile?.args ?? []), "serve", "--port", String(port), "--hostname", "127.0.0.1", "--print-logs", "--log-level", "ERROR"], {
       cwd,
-      env: { ...process.env, PWD: cwd, OPENCODE_SERVER_PASSWORD: password },
+      env: { ...process.env, ...profile?.env, PWD: cwd, OPENCODE_SERVER_PASSWORD: password },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
@@ -203,7 +205,7 @@ async function streamEvents(serve: Serve, cwd: string, signal: AbortSignal, sess
 
 /** Spawns one turn; `onSession` sees the session id from the first JSON event. */
 async function spawnTurn(key: string, cwd: string, text: string, opts: SendOptions, extra: string[], onSession?: (id: string) => void) {
-  const bin = await binary();
+  const bin = await profileBin(binary);
   if (!bin) throw new Error("OpenCode isn't installed (no `opencode` binary found).");
   if (turnState(key)?.status === "running") throw new Error("A turn is already running for this session.");
   const serve = await startServe(bin, cwd);

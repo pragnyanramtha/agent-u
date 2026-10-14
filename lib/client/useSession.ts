@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { AgentId, Entry, PermissionMode, RunState, ServerEvent, StreamDelta, TerminalInfo, ToolResult } from "@/lib/types";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 
 type Stream = { msgId: string; index: number; kind: StreamDelta["kind"]; text: string };
 /** A message the user sent that isn't in the transcript yet. Kept in sessionStorage so it survives remounts. */
@@ -18,6 +18,22 @@ export type Pending = {
 /* the terminal path flattens newlines, and Claude Code trims; compare on collapsed whitespace */
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const pendingKey = (id: string) => `pending:${id}`;
+
+/** waits `ms`, or less when the network comes back or the tab is shown again */
+const wake = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(t);
+      window.removeEventListener("online", done);
+      document.removeEventListener("visibilitychange", onVisible);
+      resolve();
+    };
+    const onVisible = () => document.visibilityState === "visible" && done();
+    const t = setTimeout(done, ms);
+    window.addEventListener("online", done);
+    document.addEventListener("visibilitychange", onVisible);
+    signal.addEventListener("abort", done, { once: true });
+  });
 
 /* Live text of non-Claude agents (Codex, OpenCode, Cursor, Devin) arrives under msgIds
  * "live:<key>:<turn>:<segment>" that persisted entries never share. A persisted text/thinking
@@ -70,6 +86,8 @@ export type SessionView = {
   title: string;
   cwd: string;
   permissionMode: PermissionMode | null;
+  /** the agent profile the session last ran on */
+  profile: string | null;
   streams: Stream[];
   /** live streams (see isLive) already replaced by persisted entries */
   dropped: Set<string>;
@@ -99,6 +117,7 @@ const initial = (): SessionView => ({
   title: "",
   cwd: "",
   permissionMode: null,
+  profile: null,
   streams: [],
   dropped: new Set(),
   pending: [],
@@ -177,6 +196,7 @@ function reducer(state: SessionView, action: Action): SessionView {
           title: e.title,
           cwd: e.cwd,
           permissionMode: e.permissionMode,
+          profile: e.profile ?? state.profile,
         };
       }
       if (e.type === "entries") return merge(state, e.entries, "append");
@@ -243,15 +263,24 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
     /* history over a plain fetch, then a live stream from where it ended. The stream is a POST
      * read with fetch (not EventSource): some tunnels buffer GET event streams until they close. */
     (async () => {
-      let from: string | number;
-      try {
-        const first = await api<Extract<ServerEvent, { type: "history" }> & { end: string | number; agent?: AgentId }>(`/api/sessions/${id}`);
-        if (abort.signal.aborted) return;
-        dispatch({ type: "event", event: first });
-        from = first.end;
-      } catch {
-        if (!abort.signal.aborted) dispatch({ type: "status", status: "missing" });
-        return;
+      let from: string | number = 0;
+      /* only a 404 means the session is gone; anything else is the network, so keep trying */
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const first = await api<Extract<ServerEvent, { type: "history" }> & { end: string | number; agent?: AgentId }>(`/api/sessions/${id}`);
+          if (abort.signal.aborted) return;
+          dispatch({ type: "event", event: first });
+          from = first.end;
+          break;
+        } catch (err) {
+          if (abort.signal.aborted) return;
+          if (err instanceof ApiError && (err.status === 404 || err.status === 400)) {
+            dispatch({ type: "status", status: "missing" });
+            return;
+          }
+          if (attempt === 1) dispatch({ type: "status", status: "reconnecting" });
+          await wake(Math.min(8000, 500 * 2 ** attempt), abort.signal);
+        }
       }
       for (let attempt = 0; !abort.signal.aborted; attempt++) {
         try {
@@ -310,7 +339,7 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
           if (abort.signal.aborted) return;
         }
         dispatch({ type: "status", status: "reconnecting" });
-        await new Promise((r) => setTimeout(r, Math.min(8000, 500 * 2 ** attempt)));
+        await wake(Math.min(8000, 500 * 2 ** attempt), abort.signal);
       }
     })();
     return () => abort.abort();

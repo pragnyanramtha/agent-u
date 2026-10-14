@@ -4,110 +4,278 @@ import { useEffect, useRef, useState } from "react";
 import { Xmark } from "iconoir-react";
 import "@xterm/xterm/css/xterm.css";
 
-export type TerminalTarget = { session?: string; pid?: number; cwd?: string; label: string };
+/** What to open: a kept terminal (`term`), a tmux session, a CLI's multiplexer (`pid`/`session`), or a new shell (`cwd`). */
+export type TerminalTarget = { term?: string; tmux?: string; session?: string; pid?: number; cwd?: string; label: string };
 
-/* keys phones don't have; sent as raw terminal sequences */
+type Conn = "connecting" | "open" | "reconnecting" | "ended";
+
+/* keys phones don't have; sent as raw terminal sequences. "ctrl"/"alt" arm a modifier for the next key. */
 const KEYS: [string, string][] = [
   ["Esc", "\x1b"],
+  ["Ctrl", "ctrl"],
+  ["Alt", "alt"],
   ["Tab", "\t"],
   ["⇧Tab", "\x1b[Z"],
-  ["Ctrl-C", "\x03"],
   ["↑", "\x1b[A"],
   ["↓", "\x1b[B"],
   ["←", "\x1b[D"],
   ["→", "\x1b[C"],
+  ["^C", "\x03"],
+  ["^D", "\x04"],
+  ["^R", "\x12"],
+  ["Home", "\x1b[H"],
+  ["End", "\x1b[F"],
+  ["PgUp", "\x1b[5~"],
+  ["PgDn", "\x1b[6~"],
+  ["|", "|"],
+  ["/", "/"],
+  ["~", "~"],
+  ["-", "-"],
   ["Enter", "\r"],
 ];
 
+/* One Dark-ish, matched to the app's dark page */
 const THEME = {
   background: "#17181a",
   foreground: "#e6e8ec",
   cursor: "#e6e8ec",
+  cursorAccent: "#17181a",
   selectionBackground: "#3a3d44",
   black: "#1d1e21",
+  red: "#e06c75",
+  green: "#98c379",
+  yellow: "#e5c07b",
+  blue: "#61afef",
+  magenta: "#c678dd",
+  cyan: "#56b6c2",
+  white: "#c9ccd3",
   brightBlack: "#6b7079",
+  brightRed: "#f28b94",
+  brightGreen: "#b5e08f",
+  brightYellow: "#f2d398",
+  brightBlue: "#8cc7ff",
+  brightMagenta: "#dc9ef0",
+  brightCyan: "#7fd3dd",
+  brightWhite: "#ffffff",
+};
+
+const SIZE_KEY = "cui:term-font";
+const NERD = '"Symbols Nerd Font Mono"';
+
+const ctrlOf = (ch: string) => {
+  const c = ch.toUpperCase().charCodeAt(0);
+  if (c >= 64 && c <= 95) return String.fromCharCode(c - 64);
+  if (ch === " ") return "\x00";
+  return ch;
 };
 
 /**
- * A full interactive terminal: a shell on the server, or the zellij/tmux
- * session a Claude session runs in (shared with your other clients).
+ * A full interactive terminal: a shell on the server, an agent launched from the web,
+ * or the zellij/tmux session a CLI session runs in (shared with your other clients).
+ * Drops reconnect on their own: a kept terminal replays what was missed, an attach redraws.
  * Full screen on phones, a large sheet on desktop.
  */
 export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClose: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const [state, setState] = useState<"connecting" | "open" | "closed">("connecting");
+  const termRef = useRef<import("@xterm/xterm").Terminal | null>(null);
+  const [conn, setConn] = useState<Conn>("connecting");
   const [reason, setReason] = useState<string | null>(null);
+  const [label, setLabel] = useState(target.label);
   const [attempt, setAttempt] = useState(0);
+  const [mod, setMod] = useState<"ctrl" | "alt" | null>(null);
+  const modRef = useRef(mod);
+  modRef.current = mod;
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const [fontSize, setFontSize] = useState<number | null>(null);
+  const [kind, setKind] = useState<string | null>(null);
+  /* after a shell exits, "New shell" opens a fresh one in the same folder */
+  const [fresh, setFresh] = useState(false);
+  const tgt: TerminalTarget = fresh ? { cwd: target.cwd, label: target.label } : target;
 
   useEffect(() => {
     let disposed = false;
     let cleanup = () => {};
     (async () => {
-      const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
-      /* xterm measures glyphs on a canvas, which can't resolve CSS variables: use the real family, once loaded */
+      const [{ Terminal }, { FitAddon }, { Unicode11Addon }, { WebLinksAddon }] = await Promise.all([
+        import("@xterm/xterm"),
+        import("@xterm/addon-fit"),
+        import("@xterm/addon-unicode11"),
+        import("@xterm/addon-web-links"),
+      ]);
+      /* xterm measures glyphs on a canvas, which can't resolve CSS variables: use the real families, once loaded */
       const mono = getComputedStyle(document.body).getPropertyValue("--font-mono-face").trim();
-      if (mono) await Promise.all([document.fonts.load(`13px ${mono}`), document.fonts.load(`bold 13px ${mono}`)]).catch(() => undefined);
+      await Promise.all([
+        ...(mono ? [document.fonts.load(`13px ${mono}`), document.fonts.load(`bold 13px ${mono}`)] : []),
+        document.fonts.load(`13px ${NERD}`, "\ue0b0"),
+      ]).catch(() => undefined);
       if (disposed || !hostRef.current) return;
+      const phone = window.matchMedia("(max-width: 640px)").matches;
+      const stored = Number(localStorage.getItem(SIZE_KEY));
+      const size = stored >= 8 && stored <= 24 ? stored : phone ? 12 : 13;
+      setFontSize(size);
       const term = new Terminal({
-        fontFamily: `${mono ? `${mono}, ` : ""}ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`,
-        lineHeight: 1.15,
-        fontSize: window.matchMedia("(max-width: 640px)").matches ? 12 : 13,
+        fontFamily: `${mono ? `${mono}, ` : ""}${NERD}, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`,
+        lineHeight: 1.12,
+        fontSize: size,
         cursorBlink: true,
-        scrollback: 5000,
+        scrollback: 10000,
         theme: THEME,
-        allowProposedApi: false,
+        allowProposedApi: true,
+        macOptionIsMeta: true,
+        rightClickSelectsWord: true,
+        smoothScrollDuration: 0,
+        drawBoldTextInBrightColors: false,
+        minimumContrastRatio: 1,
       });
+      termRef.current = term;
       const fit = new FitAddon();
       term.loadAddon(fit);
+      term.loadAddon(new Unicode11Addon());
+      term.unicode.activeVersion = "11";
+      term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, "_blank", "noopener,noreferrer")));
       term.open(hostRef.current);
+      /* the GPU renderer draws box art and Nerd Font icons cell-exact; fall back to the DOM renderer without WebGL */
+      try {
+        const { WebglAddon } = await import("@xterm/addon-webgl");
+        const gl = new WebglAddon();
+        gl.onContextLoss(() => gl.dispose());
+        term.loadAddon(gl);
+      } catch {
+        /* DOM renderer */
+      }
       fit.fit();
 
-      const q = new URLSearchParams({ cols: String(term.cols), rows: String(term.rows) });
-      if (target.pid) q.set("pid", String(target.pid));
-      else if (target.session) q.set("session", target.session);
-      if (target.cwd) q.set("cwd", target.cwd);
-      const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/pty?${q}`);
-      ws.binaryType = "arraybuffer";
-      wsRef.current = ws;
-      setState("connecting");
-      setReason(null);
+      /* connection loop: a kept terminal is re-joined by id from the last byte seen */
+      let kept: string | null = tgt.term ?? null;
+      let received = 0;
+      let tries = 0;
+      let ended = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let ws: WebSocket | null = null;
+      const pending: string[] = [];
+      const encoder = new TextEncoder();
 
-      const send = (data: string) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "input", data }));
-      ws.onopen = () => {
-        setState("open");
-        term.focus();
+      const connect = () => {
+        if (disposed || ended) return;
+        clearTimeout(timer);
+        const q = new URLSearchParams({ cols: String(term.cols), rows: String(term.rows) });
+        if (kept) {
+          q.set("term", kept);
+          q.set("since", String(received));
+        } else if (tgt.tmux) q.set("tmux", tgt.tmux);
+        else if (tgt.pid) q.set("pid", String(tgt.pid));
+        else if (tgt.session) q.set("session", tgt.session);
+        else if (tgt.cwd) q.set("cwd", tgt.cwd);
+        const sock = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/pty?${q}`);
+        sock.binaryType = "arraybuffer";
+        ws = sock;
+        wsRef.current = sock;
+        let opened = false;
+        sock.onopen = () => {
+          opened = true;
+          tries = 0;
+          setConn("open");
+          setReason(null);
+          term.focus();
+          for (const d of pending.splice(0)) sock.send(encoder.encode(d));
+        };
+        sock.onmessage = (e) => {
+          if (typeof e.data === "string") {
+            const msg = JSON.parse(e.data) as { type: string; id?: string; label?: string; kind?: string; persistent?: boolean; code?: number };
+            if (msg.type === "hello") {
+              if (msg.label) setLabel(msg.label);
+              setKind(msg.kind ?? null);
+              /* an attach starts over each time; the multiplexer redraws everything */
+              if (msg.persistent && msg.id) kept = msg.id;
+              else term.reset();
+            } else if (msg.type === "reset") term.reset();
+            else if (msg.type === "exit") {
+              ended = true;
+              setConn("ended");
+              setReason(msg.code ? `Exited with code ${msg.code}.` : "The terminal exited.");
+            }
+            return;
+          }
+          const bytes = new Uint8Array(e.data as ArrayBuffer);
+          received += bytes.length;
+          term.write(bytes);
+        };
+        sock.onclose = (e) => {
+          if (ws !== sock || disposed) return;
+          if (ended || e.code === 1000 || (e.code >= 4400 && e.code < 4500)) {
+            ended = true;
+            setConn("ended");
+            setReason((r) => r ?? (e.reason || "The terminal closed."));
+            return;
+          }
+          setConn("reconnecting");
+          setReason(opened ? "Connection lost. Reconnecting…" : "Can't reach the terminal server. Retrying…");
+          tries++;
+          timer = setTimeout(connect, Math.min(10_000, 400 * 2 ** Math.min(tries, 5)));
+        };
       };
-      ws.onmessage = (e) => term.write(typeof e.data === "string" ? e.data : new Uint8Array(e.data));
-      ws.onclose = (e) => {
-        setState("closed");
-        setReason(e.code === 1000 ? "The terminal exited." : e.reason || "Disconnected.");
+
+      const sendData = (data: string) => {
+        if (ws?.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
+        else if (!ended && pending.join("").length < 4096) pending.push(data);
       };
-      const onData = term.onData(send);
-      const onResize = term.onResize(({ cols, rows }) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "resize", cols, rows })));
-      const ro = new ResizeObserver(() => {
-        try {
-          fit.fit();
-        } catch {
-          /* hidden */
+      const onData = term.onData((data) => {
+        const m = modRef.current;
+        if (m && data.length === 1) {
+          setMod(null);
+          sendData(m === "ctrl" ? ctrlOf(data) : `\x1b${data}`);
+          return;
         }
+        sendData(data);
+      });
+      const onResize = term.onResize(({ cols, rows }) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "resize", cols, rows })));
+      let fitTimer: ReturnType<typeof setTimeout> | undefined;
+      const ro = new ResizeObserver(() => {
+        clearTimeout(fitTimer);
+        fitTimer = setTimeout(() => {
+          try {
+            fit.fit();
+          } catch {
+            /* hidden */
+          }
+        }, 40);
       });
       ro.observe(hostRef.current);
+      /* come back fast after the phone wakes up or the network returns */
+      const wake = () => {
+        if (document.visibilityState !== "visible" || disposed || ended) return;
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          tries = 0;
+          connect();
+        }
+      };
+      window.addEventListener("online", wake);
+      document.addEventListener("visibilitychange", wake);
+      (term as unknown as { __send?: (d: string) => void }).__send = sendData;
+      (term as unknown as { __fit?: () => void }).__fit = () => fit.fit();
+      connect();
+
       cleanup = () => {
+        clearTimeout(timer);
+        clearTimeout(fitTimer);
+        window.removeEventListener("online", wake);
+        document.removeEventListener("visibilitychange", wake);
         ro.disconnect();
         onData.dispose();
         onResize.dispose();
-        ws.close();
+        ended = true;
+        ws?.close(4000, "closed by viewer");
         term.dispose();
+        termRef.current = null;
       };
     })();
     return () => {
       disposed = true;
       cleanup();
     };
-  }, [target.session, target.pid, target.cwd, attempt]);
+  }, [tgt.term, tgt.tmux, tgt.session, tgt.pid, tgt.cwd, attempt]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -121,43 +289,89 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const send = (seq: string) => (termRef.current as unknown as { __send?: (d: string) => void } | null)?.__send?.(seq);
   const press = (seq: string) => {
-    const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data: seq }));
+    if (seq === "ctrl" || seq === "alt") return setMod((m) => (m === seq ? null : seq));
+    if (mod && seq.length === 1) {
+      setMod(null);
+      return send(mod === "ctrl" ? ctrlOf(seq) : `\x1b${seq}`);
+    }
+    send(seq);
+    termRef.current?.focus();
+  };
+  const zoom = (delta: number) => {
+    const t = termRef.current;
+    if (!t) return;
+    const next = Math.min(24, Math.max(8, (t.options.fontSize ?? 13) + delta));
+    t.options.fontSize = next;
+    setFontSize(next);
+    localStorage.setItem(SIZE_KEY, String(next));
+    (t as unknown as { __fit?: () => void }).__fit?.();
+  };
+  const paste = async () => {
+    const text = await navigator.clipboard?.readText().catch(() => "");
+    if (text) termRef.current?.paste(text);
   };
 
+  const dot = conn === "open" ? "bg-green" : conn === "ended" ? "bg-red" : "animate-pulse bg-orange";
+  const tool = "h-7 shrink-0 rounded-[7px] px-2 text-[12px] text-[#c9ccd3] hover:bg-white/10";
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/50 lg:items-center lg:p-6" role="dialog" aria-modal="true" aria-label={`Terminal: ${target.label}`}>
+    <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/50 lg:items-center lg:p-6" role="dialog" aria-modal="true" aria-label={`Terminal: ${label}`}>
       <div
-        className="safe-top safe-bottom flex w-full flex-col overflow-hidden bg-[#17181a] shadow-overlay lg:h-[min(86dvh,900px)] lg:max-w-[1200px] lg:rounded-[14px] lg:border lg:border-line"
+        className="safe-top safe-bottom flex w-full flex-col overflow-hidden bg-[#17181a] shadow-overlay lg:h-[min(90dvh,1000px)] lg:max-w-[1400px] lg:rounded-[14px] lg:border lg:border-line"
         style={{ animation: "pop-in 200ms cubic-bezier(0.23,1,0.32,1) both" }}
       >
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-white/10 px-3 text-[12.5px] text-[#c9ccd3]">
-          <span className={`size-2 shrink-0 rounded-full ${state === "open" ? "bg-green" : state === "connecting" ? "animate-pulse bg-orange" : "bg-red"}`} aria-hidden />
-          <span className="font-medium text-[#e6e8ec]">Terminal</span>
-          <span className="min-w-0 truncate font-mono text-[11.5px] text-[#8b909a]">{target.label}</span>
-          {state === "closed" && (
-            <button type="button" onClick={() => setAttempt((a) => a + 1)} className="ml-2 shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-[12px] font-medium text-[#e6e8ec] hover:bg-white/15">
-              Reconnect
+        <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-white/10 px-3 text-[12.5px] text-[#c9ccd3]">
+          <span className={`size-2 shrink-0 rounded-full ${dot}`} aria-hidden />
+          <span className="min-w-0 truncate font-mono text-[12px] text-[#e6e8ec]" title={label}>
+            {label}
+          </span>
+          {conn === "reconnecting" && <span className="shrink-0 text-[11.5px] text-orange">Reconnecting…</span>}
+          {conn === "ended" && kind !== "agent" && (
+            <button
+              type="button"
+              onClick={() => {
+                if (kind === "shell" || !kind) setFresh(true);
+                setAttempt((a) => a + 1);
+              }}
+              className="ml-1 shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-[12px] font-medium text-[#e6e8ec] hover:bg-white/15"
+            >
+              {kind === "shell" || !kind ? "New shell" : "Reattach"}
             </button>
           )}
-          <span className="ml-auto hidden shrink-0 text-[11px] text-[#6b7079] lg:inline">Ctrl+Shift+X to close</span>
+          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+            <button type="button" onClick={() => zoom(-1)} aria-label="Smaller text" className={tool}>
+              A−
+            </button>
+            <span className="w-5 text-center text-[11px] tabular-nums text-[#6b7079]">{fontSize ?? ""}</span>
+            <button type="button" onClick={() => zoom(1)} aria-label="Larger text" className={tool}>
+              A+
+            </button>
+            <button type="button" onClick={() => void paste()} className={`${tool} max-sm:hidden`}>
+              Paste
+            </button>
+            <span className="mx-1 hidden text-[11px] text-[#6b7079] lg:inline">Ctrl+Shift+X to close</span>
+          </span>
           <button type="button" onClick={onClose} aria-label="Close terminal" className="tap relative flex size-8 shrink-0 items-center justify-center rounded-[8px] text-[#8b909a] hover:bg-white/10 hover:text-[#e6e8ec]">
             <Xmark width={16} height={16} strokeWidth={2} />
           </button>
         </div>
-        {state === "closed" && reason && <p className="shrink-0 bg-red/10 px-3 py-1.5 text-[12px] text-[#f2a7a7]">{reason}</p>}
+        {reason && conn !== "open" && <p className={`shrink-0 px-3 py-1.5 text-[12px] ${conn === "ended" ? "bg-red/10 text-[#f2a7a7]" : "bg-orange/10 text-[#f2d398]"}`}>{reason}</p>}
         <div ref={hostRef} className="min-h-0 flex-1 px-1.5 pt-1.5" />
         <div className="no-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 px-2 py-1.5 lg:hidden" role="toolbar" aria-label="Terminal keys">
-          {KEYS.map(([label, seq]) => (
+          <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => void paste()} className="h-8 shrink-0 rounded-[7px] bg-white/[0.06] px-2.5 font-mono text-[12px] text-[#c9ccd3] active:bg-white/15">
+            Paste
+          </button>
+          {KEYS.map(([text, seq]) => (
             <button
-              key={label}
+              key={text}
               type="button"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => press(seq)}
-              className="h-8 shrink-0 rounded-[7px] bg-white/[0.06] px-2.5 font-mono text-[12px] text-[#c9ccd3] active:bg-white/15"
+              aria-pressed={seq === mod || undefined}
+              className={`h-8 shrink-0 rounded-[7px] px-2.5 font-mono text-[12px] active:bg-white/15 ${seq === mod ? "bg-white/25 text-white" : "bg-white/[0.06] text-[#c9ccd3]"}`}
             >
-              {label}
+              {text}
             </button>
           ))}
         </div>

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Entry, PermissionMode } from "@/lib/types";
 import { liveStream, rekeyTurn, startTurn, stopTurn, turnState, type Run } from "./cli-run";
+import { profileBin } from "../profiles";
 import {
   devinDataDir,
   devinLocksDir,
@@ -249,7 +250,7 @@ function argsFor(text: string, mode: PermissionMode, model: string | undefined, 
 }
 
 async function start(opts: { cwd: string; text: string; model?: string; mode: PermissionMode }): Promise<{ id: string }> {
-  const bin = await findBinary();
+  const bin = await profileBin(findBinary);
   if (!bin) throw new Error("Devin isn't installed on the server.");
   if (!hasCredentials()) throw new Error(LOGIN_HINT);
   const db = openDb();
@@ -326,7 +327,7 @@ function listAllIds(db: NonNullable<ReturnType<typeof openDb>>): string[] {
 }
 
 async function send(id: string, text: string, opts: { model?: string; mode: PermissionMode }): Promise<void> {
-  const bin = await findBinary();
+  const bin = await profileBin(findBinary);
   if (!bin) throw new Error("Devin isn't installed on the server.");
   const db = openDb();
   const row = db ? getSession(db, id) : null;

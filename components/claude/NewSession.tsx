@@ -4,7 +4,10 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { Clock, Menu } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type PermissionMode, type SessionSummary } from "@/lib/types";
 import { api, ApiError, timeAgo } from "@/lib/client/api";
-import { Composer, type AgentOption } from "./Composer";
+import { profileModels, profilesFor, useProfiles } from "@/lib/client/useProfiles";
+import { newClientId } from "@/lib/client/send";
+import { openServerTerminal } from "@/lib/client/terminals";
+import { Composer, MODELS, type AgentOption } from "./Composer";
 import { FolderPicker } from "./FolderPicker";
 import { Pulse } from "./Pulse";
 import { isBusy } from "./SessionList";
@@ -44,6 +47,9 @@ export function NewSession({
   const [picker, setPicker] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [folderInvalid, setFolderInvalid] = useState(false);
+  const [profile, setProfile] = useState<string>("claude");
+  const [launching, setLaunching] = useState(false);
+  const { profiles } = useProfiles();
   const [now, setNow] = useState(0);
   /* once the user picks a folder, never refill it behind their back */
   const touched = useRef(false);
@@ -63,6 +69,19 @@ export function NewSession({
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* the profile last used for each agent */
+  useEffect(() => {
+    const saved = localStorage.getItem(`cui:newProfile:${agent}`);
+    const list = profilesFor(profiles, agent);
+    setProfile(saved && list.some((p) => p.id === saved && p.installed) ? saved : agent);
+  }, [agent, profiles]);
+  const pickProfile = (id: string) => {
+    setProfile(id);
+    setModel("");
+    localStorage.setItem(`cui:newProfile:${agent}`, id);
+  };
+  const profileInfo = profiles?.find((p) => p.id === profile);
 
   const pickAgent = (a: AgentId) => {
     setAgent(a);
@@ -114,7 +133,7 @@ export function NewSession({
       return false;
     }
     try {
-      const { id } = await api<{ id: string }>("/api/sessions", { agent, cwd: cwd.trim(), text, model: model || undefined, permissionMode: mode });
+      const { id } = await api<{ id: string }>("/api/sessions", { agent, profile, cwd: cwd.trim(), text, model: model || undefined, permissionMode: mode, clientId: newClientId() });
       localStorage.setItem("cui:lastCwd", cwd.trim());
       onOpen(id);
       return true;
@@ -123,6 +142,27 @@ export function NewSession({
       if (/^No folder at/.test(msg)) setFolderInvalid(true);
       setError(msg);
       return false;
+    }
+  };
+
+  /* the agent's own TUI in a terminal the server keeps, for work that needs it */
+  const startInTerminal = async () => {
+    setError(null);
+    if (!cwd.trim()) {
+      setFolderInvalid(true);
+      setError(`Choose a folder for ${name} to work in.`);
+      setPicker(true);
+      return;
+    }
+    setLaunching(true);
+    try {
+      const t = await api<{ id: string; backing: string; label: string }>("/api/terminals", { profile, cwd: cwd.trim(), model: model || undefined });
+      localStorage.setItem("cui:lastCwd", cwd.trim());
+      openServerTerminal(t, `${t.label} in ${cwd.trim().split("/").pop()}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't open the terminal.");
+    } finally {
+      setLaunching(false);
     }
   };
 
@@ -158,8 +198,11 @@ export function NewSession({
               onModeChange={setMode}
               model={model || null}
               onModelChange={setModel}
-              models={agent === "claude" ? undefined : [{ key: "", name: "Default" }]}
+              models={profileModels(profileInfo, agent === "claude" ? MODELS : [{ key: "", name: "Default" }])}
               cwd={agent === "claude" ? cwd.trim() || undefined : undefined}
+              profiles={profiles ?? undefined}
+              profile={profile}
+              onProfileChange={pickProfile}
               agents={agents}
               agent={agent}
               onAgentChange={pickAgent}
@@ -174,6 +217,16 @@ export function NewSession({
                 {error}
               </p>
             )}
+            <div className="flex justify-end px-3 pt-2">
+              <button
+                type="button"
+                onClick={startInTerminal}
+                disabled={launching}
+                className="tap relative rounded-chip px-1 text-[12.5px] text-ink-3 transition-colors duration-150 hover:text-ink disabled:opacity-60"
+              >
+                {launching ? `Opening ${profileInfo?.label ?? name}…` : `Or open ${profileInfo?.label ?? name} in a terminal on the server`}
+              </button>
+            </div>
           </div>
 
           {rows.length > 0 && (

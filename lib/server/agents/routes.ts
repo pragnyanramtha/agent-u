@@ -7,6 +7,9 @@ import { InputRefused, inputTarget, typeIntoTerminal } from "../input";
 import { terminalOf, toRunState } from "./bridge";
 import { onDelta, onTurn } from "./cli-run";
 import { adapterFor, sessionKey } from "./index";
+import { handoffTitle } from "@/lib/handoff-text";
+import { guardTurn, onSessionEvent, sameStore } from "../fallback";
+import { pickProfile, setSessionProfile, withProfile } from "../profiles";
 
 /* Route handlers for non-Claude sessions (ids "<agent>:<nativeId>").
  * Same wire shapes as the Claude routes, so the client doesn't care which agent it is. */
@@ -32,9 +35,10 @@ export async function agentHistory(agent: AgentId, native: string, before: strin
     end: page.end,
     terminal,
     run: toRunState(key, a.runState(native), modes.get(key) ?? "default", session?.model ?? null),
-    title: session?.title || `New ${a.label} session`,
+    title: handoffTitle(session?.title ?? "") || `New ${a.label} session`,
     cwd: session?.cwd ?? "",
     permissionMode: modes.get(key) ?? null,
+    profile: pickProfile(agent, null, key).id,
     agent,
   });
 }
@@ -65,13 +69,14 @@ export async function agentEvents(req: NextRequest, agent: AgentId, native: stri
         }
       };
       const runOf = () => toRunState(key, a.runState(native), modes.get(key) ?? "default", session?.model ?? null);
-      send({ type: "history", entries: [], cursor: null, terminal, run: runOf(), title: session?.title || `New ${a.label} session`, cwd: session?.cwd ?? "", permissionMode: modes.get(key) ?? null });
+      send({ type: "history", entries: [], cursor: null, terminal, run: runOf(), title: handoffTitle(session?.title ?? "") || `New ${a.label} session`, cwd: session?.cwd ?? "", permissionMode: modes.get(key) ?? null, profile: pickProfile(agent, null, key).id });
+      cleanups.push(onSessionEvent(key, (e) => send(e)));
       cleanups.push(a.watch(native, start, (entries, end) => entries.length && send({ type: "entries", entries }, end)));
       cleanups.push(onTurn(key, () => send({ type: "run", run: runOf() })));
       /* live text of a web-driven turn; a running turn replays its text so far right after the history event */
       cleanups.push(onDelta(key, (delta) => send({ type: "delta", delta })));
       let last = JSON.stringify(terminal);
-      let title = session?.title ?? "";
+      let title = handoffTitle(session?.title ?? "");
       const tick = setInterval(async () => {
         const [t, s] = await Promise.all([terminalOf(a, native).catch(() => null), a.get(native).catch(() => null)]);
         const k = JSON.stringify(t);
@@ -80,8 +85,8 @@ export async function agentEvents(req: NextRequest, agent: AgentId, native: stri
           send({ type: "terminal", terminal: t });
         }
         /* new sessions get their title from the agent a little after the first turn */
-        if (s?.title && s.title !== title) {
-          title = s.title;
+        if (s?.title && handoffTitle(s.title) !== title) {
+          title = handoffTitle(s.title);
           send({ type: "title", title });
         }
       }, 3000);
@@ -130,18 +135,27 @@ export async function agentMessage(agent: AgentId, native: string, body: Record<
     }
   }
   if (a.runState(native)?.status === "running") return NextResponse.json({ error: `${a.label} is still working on the last message. Wait for it to finish.`, code: "busy" }, { status: 409 });
+  const before = pickProfile(agent, null, key);
+  const profile = pickProfile(agent, body.profile, key);
+  if (!sameStore(before, profile)) {
+    return NextResponse.json({ error: `${profile.label} keeps its sessions elsewhere. Use "Continue in" to move this session there.`, code: "other_store" }, { status: 409 });
+  }
+  const model = str(body.model) || undefined;
   try {
-    await a.send(native, text, { model: str(body.model) || undefined, mode });
+    await withProfile(profile, () => a.send(native, text, { model, mode }));
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }
+  setSessionProfile(key, profile.id);
+  guardTurn({ key, text, mode, model, profile });
   return NextResponse.json({ id: key, via: "web" });
 }
 
 export async function agentStart(agent: AgentId, body: Record<string, unknown>) {
   const a = await adapterFor(agent);
   if (!a) return NextResponse.json({ error: "Unknown agent." }, { status: 400 });
-  if (!(await a.binary())) return NextResponse.json({ error: `${a.label} isn't installed on the server.` }, { status: 400 });
+  const chosen = pickProfile(agent, body.profile, null);
+  if (!(chosen.bin ? chosen.binPath : await a.binary())) return NextResponse.json({ error: `${chosen.label} isn't installed on the server.` }, { status: 400 });
   const text = str(body.text)?.trim();
   const cwd = str(body.cwd)?.trim();
   if (!text) return NextResponse.json({ error: "Write a first message to start the session." }, { status: 400 });
@@ -149,13 +163,18 @@ export async function agentStart(agent: AgentId, body: Record<string, unknown>) 
     return NextResponse.json({ error: `No folder at ${cwd || "(empty)"} on the server.` }, { status: 400 });
   }
   const mode = parseMode(body.permissionMode) ?? "default";
+  const profile = chosen;
+  const model = str(body.model) || undefined;
   try {
     const { id } = await Promise.race([
-      a.start({ cwd, text, model: str(body.model) || undefined, mode }),
+      withProfile(profile, () => a.start({ cwd, text, model, mode })),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${a.label} didn't start within 90 seconds.`)), 90_000)),
     ]);
-    modes.set(sessionKey(agent, id), mode);
-    return NextResponse.json({ id: sessionKey(agent, id) });
+    const key = sessionKey(agent, id);
+    modes.set(key, mode);
+    setSessionProfile(key, profile.id);
+    guardTurn({ key, text, mode, model, profile });
+    return NextResponse.json({ id: key });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }

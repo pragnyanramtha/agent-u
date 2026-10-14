@@ -1,5 +1,6 @@
 "use client";
 
+import { parseHandoff } from "@/lib/handoff-text";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, MediaImage } from "iconoir-react";
 import LoadingState from "@/components/primitives/LoadingState";
@@ -166,6 +167,7 @@ function UserText({ text }: { text: string }) {
 
 const UserBubble = memo(function UserBubble({ text, images, pending, ts }: { text: string; images?: number; pending?: boolean; ts?: string }) {
   const [expanded, setExpanded] = useState(false);
+  const handoff = parseHandoff(text);
   const long = text.length > 700 || text.split("\n").length > 14;
   const clamp = long && !expanded;
   /* a message still being sent has nothing settled to copy or time yet. The caller's wrapper carries ACTIONS_GAP. */
@@ -182,7 +184,14 @@ const UserBubble = memo(function UserBubble({ text, images, pending, ts }: { tex
             {images === 1 ? "1 image" : `${images} images`}
           </span>
         ) : null}
-        {text && (
+        {handoff && (
+          <span className="text-[12px] font-medium text-ink-3">
+            Continued from {handoff.from}
+            {handoff.title ? `: ${handoff.title}` : ""}. The earlier conversation is attached{expanded ? " below" : ""}.
+          </span>
+        )}
+        {handoff && !expanded && handoff.next && <UserText text={handoff.next} />}
+        {text && (!handoff || expanded) && (
           <div
             className={`relative min-w-0 ${clamp ? "max-h-[17.5em] overflow-hidden" : ""}`}
             style={clamp ? { maskImage: "linear-gradient(to bottom, black 75%, transparent)", WebkitMaskImage: "linear-gradient(to bottom, black 75%, transparent)" } : undefined}

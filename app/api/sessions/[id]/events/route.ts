@@ -9,6 +9,8 @@ import { tailFile } from "@/lib/server/tail";
 import { metaTitle, readHistory } from "@/lib/server/transcript";
 import { parseSessionKey } from "@/lib/server/agents";
 import { agentEvents } from "@/lib/server/agents/routes";
+import { onSessionEvent } from "@/lib/server/fallback";
+import { pickProfile } from "@/lib/server/profiles";
 
 export const dynamic = "force-dynamic";
 
@@ -95,6 +97,7 @@ async function stream(req: NextRequest, id: string, fromParam: string | null) {
         if (current || !failed) send({ type: "run", run: current ? current.state : null });
       };
       const unwatchRuns = onRunRegistered((rid) => rid === id && syncRun());
+      const unwatchBus = onSessionEvent(id, (e) => send(e));
 
       /* subscriptions deliver asynchronously, so registering them before the history event keeps the order */
       const unsubTail = tailFile(file, history.end, (entries, end) => send({ type: "entries", entries }, end));
@@ -120,6 +123,7 @@ async function stream(req: NextRequest, id: string, fromParam: string | null) {
         clearInterval(ping);
         unsubTail();
         unwatchRuns();
+        unwatchBus();
         unsubRun?.();
         unsubRun = null;
       });
@@ -145,6 +149,7 @@ async function stream(req: NextRequest, id: string, fromParam: string | null) {
         title: (ctx && metaTitle(ctx.meta)) ?? "New session",
         cwd: cwd ?? "",
         permissionMode: parseMode(ctx?.meta.permissionMode),
+        profile: (watchedRun?.profile ?? pickProfile("claude", null, id)).id,
       });
       /* what the run said outside the transcript (slash command output) */
       if (watchedRun?.extras.length) send({ type: "entries", entries: watchedRun.extras });

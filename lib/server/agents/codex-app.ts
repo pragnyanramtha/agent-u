@@ -29,6 +29,8 @@ export type AppTurnOptions = {
   mode: PermissionMode;
   /** resume this thread; omitted starts a new one */
   threadId?: string;
+  /** Responses API items put into a new thread's history before the first turn (a conversation moved from another agent) */
+  inject?: unknown[];
   /** the thread id, as soon as the app server reports it (before the model answers) */
   onThread?: (id: string) => void;
 };
@@ -149,9 +151,12 @@ export function appServerTurn(o: AppTurnOptions): Run {
       threadId = str(obj(obj(r.result).thread).id) || threadId;
       if (!threadId) return finish("Codex didn't report a session id.");
       o.onThread?.(threadId);
-      request("turn/start", { threadId, input: [{ type: "text", text: o.text, text_elements: [] }] }, (t) => {
-        if (t.error) fail(t, "Starting the turn");
-      });
+      const turn = () =>
+        request("turn/start", { threadId, input: [{ type: "text", text: o.text, text_elements: [] }] }, (t) => {
+          if (t.error) fail(t, "Starting the turn");
+        });
+      if (o.inject?.length && !o.threadId) request("thread/inject_items", { threadId, items: o.inject }, (r) => (r.error ? fail(r, "Importing the earlier conversation") : turn()));
+      else turn();
     };
     if (o.threadId) request("thread/resume", { threadId: o.threadId, excludeTurns: true, ...threadSettings(o.mode, o.model) }, onThreadReady);
     else request("thread/start", { cwd: o.cwd, ...threadSettings(o.mode, o.model) }, onThreadReady);

@@ -5,6 +5,7 @@ import { terminalFor } from "@/lib/server/sessions";
 import { metaTitle, readHistory } from "@/lib/server/transcript";
 import { parseSessionKey } from "@/lib/server/agents";
 import { agentHistory } from "@/lib/server/agents/routes";
+import { pickProfile } from "@/lib/server/profiles";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       title: (ctx && metaTitle(ctx.meta)) ?? "New session",
       cwd: ctx?.cwd ?? run?.cwd ?? terminal?.cwd ?? "",
       permissionMode: parseMode(ctx?.meta.permissionMode),
+      profile: (run?.profile ?? pickProfile("claude", null, id)).id,
     });
   }
   if (!ctx) return NextResponse.json({ error: "Session not found" }, { status: 404 });

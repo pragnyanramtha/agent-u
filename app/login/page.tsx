@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { LoginForm } from "@/components/claude/LoginForm";
 
-export const metadata: Metadata = { title: "Sign in · Claude" };
+export const metadata: Metadata = { title: "Sign in · agent-u" };
 
 export default function LoginPage() {
   return (

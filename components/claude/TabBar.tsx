@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { EditPencil, List, Plus, Xmark } from "iconoir-react";
+import { EditPencil, Folder, List, Plus, Terminal, Xmark } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type SessionSummary } from "@/lib/types";
 import { timeAgo } from "@/lib/client/api";
 import { Pulse } from "./Pulse";
 import { AGENT_TONE, AgentBadge, isBusy } from "./SessionList";
-import { NEW_TAB, type Tab } from "./useTabs";
+import { AGENTS_TAB, NEW_TAB, VIEW_TABS, type Tab } from "./useTabs";
 
 /* ─────────────────────────────────────────────────────────
  * TABS
@@ -32,6 +32,7 @@ export type TabInfo = {
 
 export function describeTab(tab: Tab, session: SessionSummary | undefined, listLoaded: boolean, now = Date.now()): TabInfo {
   if (tab.id === NEW_TAB) return { id: tab.id, title: "New session", agent: "claude", live: false, busy: false, needsYou: false, meta: null };
+  if (VIEW_TABS[tab.id]) return { id: tab.id, title: VIEW_TABS[tab.id], agent: "claude", live: false, busy: false, needsYou: false, meta: tab.id === AGENTS_TAB ? "Terminals and profiles" : "Files on the server" };
   const agent = (tab.id.includes(":") ? tab.id.slice(0, tab.id.indexOf(":")) : "claude") as AgentId;
   if (!session) {
     return { id: tab.id, title: tab.title ?? (listLoaded ? "Session" : "Loading…"), agent: AGENT_LABEL[agent] ? agent : "claude", live: false, busy: false, needsYou: false, meta: null };
@@ -53,6 +54,8 @@ export function describeTab(tab: Tab, session: SessionSummary | undefined, listL
 function Indicator({ t, size = 2.5 }: { t: TabInfo; size?: number }) {
   if (t.needsYou) return <span className="size-1.5 shrink-0 rounded-full bg-orange" aria-label="Needs you" role="img" />;
   if (t.id === NEW_TAB) return <EditPencil width={12} height={12} strokeWidth={2} className="shrink-0 text-ink-3" aria-hidden />;
+  if (t.id === AGENTS_TAB) return <Terminal width={12} height={12} strokeWidth={2} className="shrink-0 text-ink-3" aria-hidden />;
+  if (VIEW_TABS[t.id]) return <Folder width={12} height={12} strokeWidth={2} className="shrink-0 text-ink-3" aria-hidden />;
   if (t.live) return <Pulse busy={t.busy} size={size} cellClass={AGENT_TONE[t.agent]} />;
   return <span className={`size-1.5 shrink-0 rounded-full ${AGENT_TONE[t.agent]} ${t.agent === "claude" ? "opacity-25" : ""}`} aria-hidden />;
 }

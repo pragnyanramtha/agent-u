@@ -6,7 +6,7 @@ import { APP_COMMANDS, rankCommands, type SlashItem } from "@/lib/commands";
 import { ContextRing, type ContextUsage } from "./ContextRing";
 import type { SessionCost } from "@/lib/client/usage";
 import { shortPath } from "@/lib/client/api";
-import { AGENT_LABEL, type AgentId, type PermissionMode } from "@/lib/types";
+import { AGENT_LABEL, type AgentId, type PermissionMode, type ProfileInfo } from "@/lib/types";
 
 /* The composer pill: one calm surface with a "+" menu on the left, the text
  * in the middle, and one quiet agent/model/approvals picker plus send on the
@@ -129,6 +129,9 @@ export function Composer({
   onPickFolder,
   folderInvalid = false,
   busyLabel,
+  profiles,
+  profile,
+  onProfileChange,
 }: {
   draftKey: string;
   placeholder: string;
@@ -166,6 +169,10 @@ export function Composer({
   folderInvalid?: boolean;
   /** shown in the box while onSend is pending (e.g. "Starting Claude…") */
   busyLabel?: string;
+  /** accounts, proxies and wrappers for the current agent; the group shows when there's more than one */
+  profiles?: ProfileInfo[];
+  profile?: string;
+  onProfileChange?: (id: string) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [menu, setMenu] = useState<Menu>(null);
@@ -346,6 +353,9 @@ export function Composer({
   const pickLabel = pickable ? (agent === "claude" && model ? `${agentLabel} · ${modelLabel(model)}` : agentLabel) : modelLabel(model);
   const modelOn = (key: string, list: { key: string }[]) => key === (model && list.some((x) => x.key === model) ? model : "");
   const busy = sending && busyLabel;
+  const profileChoices = onProfileChange ? (profiles ?? []).filter((p) => p.agent === agent && !p.hidden) : [];
+  const profileOn = profileChoices.find((p) => p.id === profile);
+  const pickText = profileOn && profileChoices.length > 1 && profileOn.id !== agent ? `${profileOn.label}${model ? ` · ${modelLabel(model)}` : ""}` : pickLabel;
 
   const modelRow = (m: { key: string; name: string }, list: { key: string }[], on: boolean, onPick: () => void) => (
     <button
@@ -455,8 +465,8 @@ export function Composer({
               <>
                 <div role="group" aria-label="Claude">
                   <MenuLabel>Claude</MenuLabel>
-                  {MODELS.map((m) =>
-                    modelRow(m, MODELS, agent === "claude" && modelOn(m.key, MODELS), () => {
+                  {(agent === "claude" ? models : MODELS).map((m, _i, list) =>
+                    modelRow(m, list, agent === "claude" && modelOn(m.key, list), () => {
                       if (agent !== "claude") onAgentChange("claude");
                       onModelChange(m.key);
                       closeMenu(true);
@@ -499,6 +509,30 @@ export function Composer({
                     closeMenu(true);
                   }),
                 )}
+              </div>
+            )}
+            {profileChoices.length > 1 && (
+              <div role="group" aria-label="Account or backend">
+                <MenuLabel>Account or backend</MenuLabel>
+                {profileChoices.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={p.id === profile}
+                    disabled={!p.installed}
+                    title={p.installed ? p.notes || undefined : `${p.bin || p.label} isn't installed on the server`}
+                    onClick={() => {
+                      onProfileChange?.(p.id);
+                      closeMenu(true);
+                    }}
+                    className={menuRow}
+                  >
+                    <span className={`min-w-0 truncate ${p.installed ? "" : "text-ink-3"}`}>{p.label}</span>
+                    {!p.installed && <span className="ml-auto text-[12px] text-ink-3">Not installed</span>}
+                    {p.id === profile && <Check width={15} height={15} strokeWidth={2.2} className="ml-auto shrink-0 text-ink" aria-hidden />}
+                  </button>
+                ))}
               </div>
             )}
             <div role="separator" className="mx-2.5 my-1 h-px bg-line" />
@@ -657,7 +691,7 @@ export function Composer({
             {mode === "bypassPermissions" && <ShieldAlert width={14} height={14} strokeWidth={1.9} className="shrink-0 text-orange-ink" aria-hidden />}
             {mode === "acceptEdits" && <ShieldCheck width={14} height={14} strokeWidth={1.9} className="shrink-0 text-ink-3" aria-hidden />}
             {mode === "plan" && <span className="shrink-0 rounded-[5px] bg-accent-tint px-1.5 py-px text-[11px] font-medium text-accent-ink">Plan</span>}
-            <span className="min-w-0 truncate whitespace-nowrap">{pickLabel}</span>
+            <span className="min-w-0 truncate whitespace-nowrap">{pickText}</span>
             <NavArrowDown width={12} height={12} strokeWidth={2.2} className={`shrink-0 text-ink-3 transition-transform duration-200 ${openMenu === "pick" ? "rotate-180" : ""}`} aria-hidden />
           </button>
           <ContextRing usage={usage} costUsd={costUsd} cost={cost} />

@@ -1,12 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { GitCompare, Menu, MoreHoriz, StatsReport, Terminal, Xmark } from "iconoir-react";
-import { AGENT_LABEL, type AgentId, type PermissionMode } from "@/lib/types";
+import { ArrowRight, Folder, GitCompare, Menu, MoreHoriz, StatsReport, Terminal, Xmark } from "iconoir-react";
+import { AGENT_LABEL, type AgentId, type PermissionMode, type ServerTerminal } from "@/lib/types";
 import { AGENT_TONE, AgentMark } from "./SessionList";
 import { OPEN_TERMINAL_EVENT } from "./CommandPalette";
 import { api, ApiError, shortPath } from "@/lib/client/api";
 import { useSession } from "@/lib/client/useSession";
+import { postReliably } from "@/lib/client/send";
+import { openServerTerminal } from "@/lib/client/terminals";
+import { profileModels, useProfiles } from "@/lib/client/useProfiles";
+import { HandoffDialog } from "./HandoffDialog";
+import { OPEN_FILES_EVENT } from "./FilesScreen";
 import { terminalBusy } from "@/lib/status";
 import { AskCards } from "./AskCards";
 import { Composer, MODELS } from "./Composer";
@@ -33,6 +38,8 @@ function useMeasure<T extends HTMLElement>() {
   return [ref, h] as const;
 }
 
+const OFFLINE = "Couldn't reach the server.";
+
 export function SessionScreen({
   id,
   onMenu,
@@ -50,6 +57,10 @@ export function SessionScreen({
   const { view, loadOlder, addPending, updatePending, dropPending } = useSession(id, onNavigate);
   const [localMode, setLocalMode] = useState<PermissionMode | null>(null);
   const [localModel, setLocalModel] = useState<string | null>(null);
+  const [localProfile, setLocalProfile] = useState<string | null>(null);
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const [launching, setLaunching] = useState(false);
+  const { profiles } = useProfiles();
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [peek, setPeek] = useState(false);
@@ -75,6 +86,8 @@ export function SessionScreen({
   const where = terminal ? terminal.multiplexer ?? "a terminal" : null;
   const agent: AgentId = id.includes(":") ? (id.slice(0, id.indexOf(":")) as AgentId) : "claude";
   const agentName = AGENT_LABEL[agent];
+  const profileId = localProfile ?? view.profile ?? agent;
+  const profileInfo = profiles?.find((p) => p.id === profileId);
   const changes = useMemo(() => collectChanges(view.entries, view.results), [view.entries, view.results]);
   const cost = useMemo(() => sessionCost(view.entries, view.run), [view.entries, view.run]);
   const usage = useMemo(() => {
@@ -125,23 +138,31 @@ export function SessionScreen({
     async (localId: string, text: string) => {
       updatePending(localId, { state: "sending", error: undefined, at: Date.now() });
       try {
-        const res = await api<{ id: string; via?: "terminal" | "web"; cleared?: string | null }>(`/api/sessions/${id}/message`, {
-          text,
-          model: localModel ?? undefined,
-          permissionMode: localMode ?? undefined,
-        });
+        const res = await postReliably<{ id: string; via?: "terminal" | "web"; cleared?: string | null }>(
+          `/api/sessions/${id}/message`,
+          { text, model: localModel ?? undefined, permissionMode: localMode ?? undefined, profile: localProfile ?? undefined },
+          localId,
+        );
         updatePending(localId, { state: "sent", via: res.via, at: Date.now() });
         /* a greyed suggestion or half-typed text was in the terminal's prompt; say what was cleared */
         if (res.cleared && !/^Try "/.test(res.cleared)) setError(`Cleared "${res.cleared.slice(0, 80)}" from the terminal's prompt before sending.`);
         if (res.id !== id) onNavigate(res.id);
       } catch (err) {
-        updatePending(localId, { state: "failed", error: err instanceof ApiError ? err.message : "Couldn't reach the server." });
+        updatePending(localId, { state: "failed", error: err instanceof ApiError && err.status < 500 ? err.message : OFFLINE });
         /* the terminal refused the keystrokes: show it, so the reason is visible */
         if (err instanceof ApiError && ["agent_focus", "has_text", "no_prompt"].includes(err.code ?? "")) setPeek(true);
       }
     },
-    [id, localModel, localMode, updatePending, onNavigate],
+    [id, localModel, localMode, localProfile, updatePending, onNavigate],
   );
+  /* sends that failed for want of a connection go out again once it's back */
+  const pendingRef = useRef(view.pending);
+  pendingRef.current = view.pending;
+  useEffect(() => {
+    const retry = () => pendingRef.current.filter((p) => p.state === "failed" && p.error === OFFLINE).forEach((p) => void deliver(p.localId, p.text));
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [deliver]);
   const send = useCallback(
     async (text: string) => {
       void deliver(addPending(text), text);
@@ -213,6 +234,31 @@ export function SessionScreen({
     setMenuOpen(false);
     menuButtonRef.current?.focus();
   };
+  /* attach to the terminal the session runs in, or start the agent's own TUI on it in a terminal the server keeps */
+  const openInteractive = async () => {
+    setPeek(false);
+    const kept = await fetch("/api/terminals")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { terminals?: ServerTerminal[] } | null) => d?.terminals?.find((t) => t.session === id && t.exited === null))
+      .catch(() => undefined);
+    if (kept) {
+      openServerTerminal(kept, `${kept.label}: ${view.title || "session"}`);
+      return;
+    }
+    if (terminal) {
+      window.dispatchEvent(new CustomEvent(OPEN_TERMINAL_EVENT, { detail: { session: agent === "claude" ? id : undefined, pid: terminal.pid, label: `${agentName} in ${where ?? "terminal"}` } }));
+      return;
+    }
+    setLaunching(true);
+    try {
+      const t = await api<{ id: string; backing: string; label: string }>("/api/terminals", { session: id, profile: profileId });
+      openServerTerminal(t, `${t.label}: ${view.title || "session"}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't open the terminal.");
+    } finally {
+      setLaunching(false);
+    }
+  };
   const openUsage = () => {
     setChangesOpen(false);
     setUsageOpen((v) => !v);
@@ -263,17 +309,18 @@ export function SessionScreen({
               <span className="max-[379px]:sr-only">{changes.length}</span>
             </button>
           )}
-          {terminal && !run && (
+          {view.status !== "missing" && (terminal || !busy) && (
             <button
               type="button"
-              onClick={() => setPeek((v) => !v)}
-              aria-pressed={peek}
-              aria-label={peek ? "Hide terminal" : "Show terminal"}
-              data-tip={peek ? "Hide terminal" : "Show terminal"}
+              onClick={() => void openInteractive()}
+              disabled={launching}
+              aria-label={terminal ? `Open ${where} interactively` : `Open ${agentName} in a terminal on the server`}
+              data-tip={terminal ? "Open interactive" : "Open in a terminal"}
               data-tip-pos="bottom"
-              className="icon-btn"
+              className="icon-btn w-auto gap-1.5 px-2.5 text-[12.5px] font-medium disabled:opacity-60"
             >
               <Terminal width={17} height={17} strokeWidth={1.8} />
+              <span className="max-sm:sr-only">{launching ? "Opening…" : "Interactive"}</span>
             </button>
           )}
           <button
@@ -335,6 +382,20 @@ export function SessionScreen({
                   <StatsReport width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
                   Usage and cost
                 </button>
+                {terminal && !run && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      setPeek((v) => !v);
+                    }}
+                    className="menu-item"
+                  >
+                    <Terminal width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
+                    {peek ? "Hide terminal preview" : "Preview terminal (read-only)"}
+                  </button>
+                )}
                 {view.cwd && (
                   <button
                     type="button"
@@ -347,6 +408,37 @@ export function SessionScreen({
                   >
                     <Terminal width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
                     Open a terminal here
+                  </button>
+                )}
+                {view.cwd && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      window.dispatchEvent(new CustomEvent(OPEN_FILES_EVENT, { detail: { path: view.cwd } }));
+                    }}
+                    className="menu-item"
+                  >
+                    <Folder width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
+                    Browse files here
+                  </button>
+                )}
+                {view.status === "open" && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      setHandoffOpen(true);
+                    }}
+                    className="menu-item items-start"
+                  >
+                    <ArrowRight width={15} height={15} strokeWidth={1.8} className="mt-0.5 shrink-0 text-ink-3" aria-hidden />
+                    <span className="flex min-w-0 flex-col">
+                      <span>Continue in another agent…</span>
+                      <span className="text-[12px] text-ink-3">Another agent, account or model picks up this conversation.</span>
+                    </span>
                   </button>
                 )}
                 {run && (
@@ -433,7 +525,13 @@ export function SessionScreen({
               }}
               autoFocus
               cwd={agent === "claude" ? view.cwd || undefined : undefined}
-              models={agent === "claude" ? undefined : [{ key: "", name: "Default" }]}
+              models={profileModels(profileInfo, agent === "claude" ? MODELS : [{ key: "", name: "Default" }])}
+              profiles={profiles ?? undefined}
+              profile={profileId}
+              onProfileChange={(p) => {
+                setLocalProfile(p);
+                setLocalModel(null);
+              }}
               usage={usage}
               suggestion={run?.suggestion ?? null}
               cost={cost}
@@ -465,6 +563,7 @@ export function SessionScreen({
       </div>
     </section>
     {usageOpen && <UsagePanel view={view} onClose={() => setUsageOpen(false)} />}
+    {handoffOpen && <HandoffDialog id={id} agent={agent} current={profileId} mode={mode} onClose={() => setHandoffOpen(false)} onOpen={onNavigate} />}
     {changesOpen && <ChangesPanel changes={changes} cwd={view.cwd} partial={view.cursor !== null} onClose={() => setChangesOpen(false)} />}
     </div>
   );

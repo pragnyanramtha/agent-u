@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, EditPencil, Folder, LogOut, MoreHoriz, NavArrowRight, Search, SidebarCollapse, SidebarExpand, Xmark } from "iconoir-react";
+import { Check, EditPencil, Folder, LogOut, MoreHoriz, NavArrowRight, Search, SidebarCollapse, SidebarExpand, Terminal, Xmark } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type SessionSummary } from "@/lib/types";
 import { api, shortPath, timeAgo } from "@/lib/client/api";
 import { terminalBusy } from "@/lib/status";
@@ -31,6 +31,7 @@ export const AGENT_TONE: Record<AgentId, string> = {
   opencode: "bg-agent-opencode",
   cursor: "bg-agent-cursor",
   devin: "bg-agent-devin",
+  kimi: "bg-agent-kimi",
 };
 
 /** A tiny colored dot that names the agent for screen readers and on hover. */
@@ -378,6 +379,8 @@ export function SessionList({
   onCollapse,
   collapseLabel = "Close sidebar",
   error,
+  onView,
+  activeView,
 }: {
   sessions: SessionSummary[] | null;
   activeId: string | null;
@@ -389,6 +392,9 @@ export function SessionList({
   onCollapse?: () => void;
   collapseLabel?: string;
   error: string | null;
+  /** opens the Agents or Files tab */
+  onView?: (tab: "@agents" | "@files") => void;
+  activeView?: string | null;
 }) {
   const mod = useModKey();
   const [query, setQuery] = useState("");
@@ -481,6 +487,18 @@ export function SessionList({
             Alt T
           </kbd>
         </button>
+        {onView && (
+          <>
+            <button type="button" onClick={() => onView("@agents")} aria-current={activeView === "@agents" ? "page" : undefined} className="side-row">
+              <Terminal width={17} height={17} strokeWidth={1.8} className="shrink-0 text-ink-2" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">Agents and terminals</span>
+            </button>
+            <button type="button" onClick={() => onView("@files")} aria-current={activeView === "@files" ? "page" : undefined} className="side-row">
+              <Folder width={17} height={17} strokeWidth={1.8} className="shrink-0 text-ink-2" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">Files</span>
+            </button>
+          </>
+        )}
       </div>
 
       {searching && (
@@ -699,12 +717,14 @@ export function SessionRail({
   onPick,
   onNew,
   onExpand,
+  onView,
 }: {
   sessions: SessionSummary[] | null;
   activeId: string | null;
   onPick: (id: string) => void;
   onNew: () => void;
   onExpand: () => void;
+  onView?: (tab: "@agents" | "@files") => void;
 }) {
   const mod = useModKey();
   const live = (sessions ?? []).filter(isLive);
@@ -726,6 +746,16 @@ export function SessionRail({
         <IconButton label="Search" tip={`Search  ${mod} K`} tipPos="right" onClick={() => window.dispatchEvent(new Event(OPEN_PALETTE_EVENT))}>
           <Search width={18} height={18} strokeWidth={1.8} aria-hidden />
         </IconButton>
+        {onView && (
+          <>
+            <IconButton label="Agents and terminals" tip="Agents and terminals" tipPos="right" onClick={() => onView("@agents")}>
+              <Terminal width={18} height={18} strokeWidth={1.8} aria-hidden />
+            </IconButton>
+            <IconButton label="Files" tip="Files" tipPos="right" onClick={() => onView("@files")}>
+              <Folder width={18} height={18} strokeWidth={1.8} aria-hidden />
+            </IconButton>
+          </>
+        )}
       </div>
       {shown.length > 0 && (
         <div className="mt-5 flex flex-col items-center gap-1" role="list" aria-label="Open now">

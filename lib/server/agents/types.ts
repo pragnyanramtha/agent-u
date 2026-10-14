@@ -1,4 +1,5 @@
 import type { AgentId, Entry, PermissionMode } from "@/lib/types";
+import type { Source } from "../handoff-shape";
 
 export type { AgentId };
 
@@ -48,6 +49,8 @@ export interface AgentAdapter {
   liveProcesses?(): Promise<Map<string, { pid: number }>>;
   /** start a new session driven by the web; resolves once the agent reports its session id */
   start(opts: StartOptions): Promise<{ id: string }>;
+  /** start a session that already knows an earlier conversation (from another agent), natively if the agent can */
+  importStart?(opts: StartOptions, src: Source): Promise<{ id: string }>;
   /** continue a session from the web (non-interactive resume) */
   send(id: string, text: string, opts: SendOptions): Promise<void>;
   /** state of the web-driven run for this session, if one exists */

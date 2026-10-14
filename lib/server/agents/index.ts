@@ -1,3 +1,4 @@
+import { AGENT_IDS } from "@/lib/types";
 import type { AgentAdapter, AgentId } from "./types";
 
 /* Registry of non-Claude agent adapters. Each lives in its own file and is
@@ -8,6 +9,7 @@ const adapters: Partial<Record<AgentId, () => Promise<AgentAdapter>>> = {
   opencode: () => import("./opencode").then((m) => m.default),
   cursor: () => import("./cursor").then((m) => m.default),
   devin: () => import("./devin").then((m) => m.default),
+  kimi: () => import("./kimi").then((m) => m.default),
 };
 
 export async function adapterFor(id: AgentId): Promise<AgentAdapter | null> {
@@ -19,7 +21,7 @@ export async function allAdapters(): Promise<AgentAdapter[]> {
 }
 
 const SAFE = /^[A-Za-z0-9._-]{1,128}$/;
-const AGENTS: AgentId[] = ["claude", "codex", "opencode", "cursor", "devin"];
+const AGENTS: AgentId[] = AGENT_IDS;
 
 /** "codex:abc" -> { agent: "codex", native: "abc" }; a bare id is Claude (backwards compatible). */
 export function parseSessionKey(key: string): { agent: AgentId; native: string } | null {

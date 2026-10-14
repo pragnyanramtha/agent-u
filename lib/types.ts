@@ -30,9 +30,47 @@ export type TerminalInfo = {
 };
 
 /** Which coding agent a session belongs to. Plain session ids are Claude; others are "<agent>:<id>". */
-export type AgentId = "claude" | "codex" | "opencode" | "cursor" | "devin";
+export type AgentId = "claude" | "codex" | "opencode" | "cursor" | "devin" | "kimi";
 
-export const AGENT_LABEL: Record<AgentId, string> = { claude: "Claude", codex: "Codex", opencode: "OpenCode", cursor: "Cursor", devin: "Devin" };
+export const AGENT_IDS: AgentId[] = ["claude", "codex", "opencode", "cursor", "devin", "kimi"];
+
+export const AGENT_LABEL: Record<AgentId, string> = { claude: "Claude", codex: "Codex", opencode: "OpenCode", cursor: "Cursor", devin: "Devin", kimi: "Kimi" };
+
+/** An agent profile as the browser sees it (secrets masked). */
+export type ProfileInfo = {
+  id: string;
+  label: string;
+  agent: AgentId;
+  bin: string;
+  binPath: string | null;
+  installed: boolean;
+  args: string[];
+  env: Record<string, string>;
+  models: string[];
+  defaultModel: string | null;
+  fallback: string[];
+  launchArgs: string[];
+  hidden: boolean;
+  notes: string;
+  builtin: boolean;
+  /** stored in the config file (a built-in only is when it's been edited) */
+  custom: boolean;
+};
+
+/** A terminal the server keeps: a shell, or an agent launched from the web. */
+export type ServerTerminal = {
+  id: string;
+  backing: "pty" | "tmux";
+  kind: string;
+  label: string;
+  cwd: string;
+  profile: string | null;
+  session: string | null;
+  createdAt: number;
+  clients: number;
+  pid: number | null;
+  exited: { code: number } | null;
+};
 
 export type SessionSummary = {
   id: string;
@@ -84,7 +122,7 @@ export type RunState = {
 export type StreamDelta = { msgId: string; index: number; kind: "text" | "thinking"; text: string };
 
 export type ServerEvent =
-  | { type: "history"; entries: Entry[]; cursor: number | null; terminal: TerminalInfo | null; run: RunState | null; title: string; cwd: string; permissionMode: PermissionMode | null }
+  | { type: "history"; entries: Entry[]; cursor: number | null; terminal: TerminalInfo | null; run: RunState | null; title: string; cwd: string; permissionMode: PermissionMode | null; profile?: string | null }
   | { type: "entries"; entries: Entry[] }
   | { type: "delta"; delta: StreamDelta }
   | { type: "run"; run: RunState | null }

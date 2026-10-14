@@ -1,30 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { COOKIE, verifySession } from "@/lib/auth";
+import { sameOrigin, signedIn } from "@/lib/guard";
 
 const PUBLIC = ["/login", "/api/auth/login", "/manifest.webmanifest", "/icon.svg", "/apple-touch-icon.png"];
-
-/** "null" (sandboxed/opaque origins) and garbage don't parse; treat them as no origin. */
-function originHost(origin: string | null) {
-  try {
-    return origin ? new URL(origin).host : null;
-  } catch {
-    return null;
-  }
-}
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const api = pathname.startsWith("/api/");
 
-  /* Defence in depth on top of SameSite=strict: state-changing API calls must come from this origin.
-   * Behind a tunnel Host is the public name and x-forwarded-host may be missing or point elsewhere, so either may match. */
-  if (api && req.method !== "GET" && req.method !== "HEAD") {
-    const hosts = [req.headers.get("host"), req.headers.get("x-forwarded-host")?.split(",")[0].trim()].filter(Boolean);
-    if (!hosts.includes(originHost(req.headers.get("origin")))) return NextResponse.json({ error: "Bad origin" }, { status: 403 });
-  }
+  /* state-changing API calls must come from this origin (see lib/guard.ts) */
+  if (api && req.method !== "GET" && req.method !== "HEAD" && !sameOrigin(req)) return NextResponse.json({ error: "Bad origin" }, { status: 403 });
 
   if (PUBLIC.includes(pathname)) return NextResponse.next();
-  if (await verifySession(req.cookies.get(COOKIE)?.value)) return NextResponse.next();
+  if (await signedIn(req)) return NextResponse.next();
 
   if (api) return NextResponse.json({ error: "Sign in first" }, { status: 401 });
   /* build from the Host the browser used: behind a tunnel or proxy, req.nextUrl says 127.0.0.1:3311 */
@@ -35,5 +22,6 @@ export async function middleware(req: NextRequest) {
 
 export const config = {
   runtime: "nodejs",
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  /* /api/files/upload runs the same checks itself (lib/guard.ts): middleware would buffer its body */
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/files/upload).*)"],
 };

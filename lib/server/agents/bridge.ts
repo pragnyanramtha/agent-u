@@ -1,3 +1,4 @@
+import { handoffTitle } from "@/lib/handoff-text";
 import path from "node:path";
 import type { PermissionMode, RunState, SessionSummary, TerminalInfo } from "@/lib/types";
 import { liveTerminals, multiplexer } from "../sessions";
@@ -46,7 +47,7 @@ export async function agentSummaries(): Promise<SessionSummary[]> {
           return {
             id: key,
             agent: a.id,
-            title: s.title || "Untitled",
+            title: handoffTitle(s.title) || "Untitled",
             cwd: s.cwd,
             project: path.basename(s.cwd) || s.cwd,
             mtime: s.mtime,

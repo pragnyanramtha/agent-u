@@ -8,7 +8,10 @@ import { NewSession } from "./NewSession";
 import { SessionList, SessionRail } from "./SessionList";
 import { SessionScreen } from "./SessionScreen";
 import { describeTab, TabBar, TabSheet, TabsButton } from "./TabBar";
-import { NEW_TAB, useTabs } from "./useTabs";
+import { AGENTS_TAB, FILES_TAB, NEW_TAB, useTabs, VIEW_TABS } from "./useTabs";
+import { AgentsScreen } from "./AgentsScreen";
+import { FilesScreen, OPEN_FILES_EVENT } from "./FilesScreen";
+import { OfflineBanner } from "./OfflineBanner";
 
 const isEditable = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && !["checkbox", "radio", "button"].includes((t as HTMLInputElement).type)));
@@ -59,11 +62,24 @@ export function App() {
     if (sessions) syncTitles((id) => byId.get(id)?.title);
   }, [sessions, byId, syncTitles]);
   const infos = useMemo(() => openTabs.map((t) => describeTab(t, byId.get(t.id), sessions !== null)), [openTabs, byId, sessions]);
-  const sessionId = active && active !== NEW_TAB ? active : null;
+  const sessionId = active && active !== NEW_TAB && !VIEW_TABS[active] ? active : null;
 
   useEffect(() => {
     if (active === NEW_TAB) document.title = "New session · agent-u";
+    else if (active && VIEW_TABS[active]) document.title = `${VIEW_TABS[active]} · agent-u`;
   }, [active]);
+
+  /* "Browse files here" from a session: the Files tab, at that folder */
+  const [filesStart, setFilesStart] = useState<{ path: string | null; n: number }>({ path: null, n: 0 });
+  useEffect(() => {
+    const on = (e: Event) => {
+      const path = (e as CustomEvent<{ path?: string }>).detail?.path ?? null;
+      setFilesStart((f) => ({ path, n: f.n + 1 }));
+      open(FILES_TAB);
+    };
+    window.addEventListener(OPEN_FILES_EVENT, on);
+    return () => window.removeEventListener(OPEN_FILES_EVENT, on);
+  }, [open]);
 
   const openSession = useCallback(
     (id: string) => {
@@ -79,6 +95,14 @@ export function App() {
     setDrawer(false);
     setSheet(false);
   }, [openNewTab]);
+  const openView = useCallback(
+    (tab: string) => {
+      open(tab);
+      setDrawer(false);
+      setSheet(false);
+    },
+    [open],
+  );
 
   /* Tab shortcuts. Ctrl+Tab when the browser lets it through; Alt+arrows, Alt+1..9,
    * Alt+T (Alt+Shift+T reopens) and Alt+W otherwise, so the browser's own Ctrl+T/W keep working.
@@ -167,7 +191,7 @@ export function App() {
   const dismissSheet = useCallback(() => setSheet(false), []);
   const closeDrawer = useCallback(() => setDrawer(false), []);
   const list = (onCollapse: () => void) => (
-    <SessionList key={themeKey} sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onCollapse={onCollapse} error={error} />
+    <SessionList key={themeKey} sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onCollapse={onCollapse} error={error} onView={openView} activeView={active} />
   );
   const tabsButton = (
     <TabsButton count={infos.length} attention={infos.some((t) => t.needsYou && t.id !== active)} onClick={() => setSheet(true)} />
@@ -186,7 +210,7 @@ export function App() {
           <div className="h-full w-[260px]">{list(sidebar.toggle)}</div>
         </div>
         <div className="shell-face absolute inset-y-0 left-0 w-[52px]" data-hidden={!sidebar.collapsed || undefined} inert={!sidebar.collapsed}>
-          <SessionRail sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onExpand={sidebar.toggle} />
+          <SessionRail sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onExpand={sidebar.toggle} onView={openView} />
         </div>
       </aside>
 
@@ -243,7 +267,11 @@ export function App() {
           </div>
         )}
         <div id="session-panel" role="tabpanel" aria-labelledby={activeIndex >= 0 ? `tab-${activeIndex}` : undefined} className="flex min-h-0 flex-1 flex-col">
-          {!ready ? null : sessionId ? (
+          {!ready ? null : active === FILES_TAB ? (
+            <FilesScreen onMenu={() => setDrawer(true)} extra={tabsButton} start={filesStart.path} startKey={filesStart.n} />
+          ) : active === AGENTS_TAB ? (
+            <AgentsScreen onMenu={() => setDrawer(true)} extra={tabsButton} onOpenSession={openSession} projects={projects} />
+          ) : sessionId ? (
             <SessionScreen
               key={sessionId}
               id={sessionId}
@@ -259,6 +287,7 @@ export function App() {
       </div>
 
       {terminal && <WebTerminal target={terminal} onClose={() => setTerminal(null)} />}
+      <OfflineBanner />
       <CommandPalette sessions={sessions} activeId={sessionId} onOpen={openSession} onNew={newTab} onTheme={onTheme} />
     </main>
   );

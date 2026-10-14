@@ -6,6 +6,13 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Nerd Font icons (powerline, devicons, file icons) as a fallback behind the text face; only fetched when a terminal asks for it */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("/fonts/SymbolsNerdFontMono.woff2") format("woff2");
+  font-display: block;
+}
+
 /* GENERIC FOUNDATION: tokens, @theme, base rules, the primitive-*
  * spacing utilities, and shared keyframes below are needed by EVERY
  * component. Blocks tagged COMPONENT-SPECIFIC further down belong to
@@ -828,6 +835,7 @@ label {
   --agent-opencode: oklch(0.6 0.17 254);
   --agent-cursor: oklch(0.62 0.11 205);
   --agent-devin: oklch(0.58 0.17 300);
+  --agent-kimi: oklch(0.62 0.16 40);
 }
 .dark {
   --sidebar: oklch(0.186 0.004 264.48);
@@ -837,6 +845,7 @@ label {
   --agent-opencode: oklch(0.72 0.14 254);
   --agent-cursor: oklch(0.76 0.1 205);
   --agent-devin: oklch(0.72 0.15 300);
+  --agent-kimi: oklch(0.76 0.14 40);
 }
 
 @theme inline {
@@ -847,6 +856,7 @@ label {
   --color-agent-opencode: var(--agent-opencode);
   --color-agent-cursor: var(--agent-cursor);
   --color-agent-devin: var(--agent-devin);
+  --color-agent-kimi: var(--agent-kimi);
 }
 
 @layer components {

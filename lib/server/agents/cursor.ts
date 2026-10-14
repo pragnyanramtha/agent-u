@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Entry, PermissionMode } from "@/lib/types";
 import { liveStream, rekeyTurn, startTurn, stopTurn, turnState } from "./cli-run";
+import { profileBin } from "../profiles";
 import { storeEntries } from "./cursor-entries";
 import { chatDirs, chatStat, findChatDir, readMetaJson, readStore, type StoreChat } from "./cursor-store";
 import { isPartialAssistant, liveParser, streamEntries } from "./cursor-stream";
@@ -353,7 +354,7 @@ function capturer(initialId: string | null) {
 }
 
 async function start(opts: { cwd: string; text: string; model?: string; mode: PermissionMode }): Promise<{ id: string }> {
-  const bin = await binary();
+  const bin = await profileBin(binary);
   if (!bin) throw new Error("Cursor CLI (cursor-agent) isn't installed on the server.");
   const tmp = KEY(`new-${randomUUID()}`);
   const cap = capturer(null);
@@ -404,7 +405,7 @@ function friendlyError(msg: string | null | undefined): string {
 }
 
 async function send(id: string, text: string, opts: { model?: string; mode: PermissionMode }): Promise<void> {
-  const bin = await binary();
+  const bin = await profileBin(binary);
   if (!bin) throw new Error("Cursor CLI (cursor-agent) isn't installed on the server.");
   const dir = findChatDir(id);
   if (!dir && !startedCwds.has(id)) throw new Error("Cursor chat not found.");

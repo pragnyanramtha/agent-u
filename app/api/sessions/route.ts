@@ -7,6 +7,9 @@ import { parseMode, readJson, str } from "@/lib/server/http";
 import type { AgentId } from "@/lib/types";
 import { agentSummaries } from "@/lib/server/agents/bridge";
 import { agentStart } from "@/lib/server/agents/routes";
+import { once } from "@/lib/server/dedupe";
+import { guardTurn } from "@/lib/server/fallback";
+import { pickProfile, setSessionProfile } from "@/lib/server/profiles";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +28,10 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await readJson(req);
+  return once(body.clientId, () => start(body));
+}
+
+async function start(body: Record<string, unknown>) {
   const agent = str(body.agent) as AgentId | undefined;
   if (agent && agent !== "claude") return agentStart(agent, body);
   const text = str(body.text)?.trim();
@@ -33,12 +40,17 @@ export async function POST(req: NextRequest) {
   if (!cwd || !path.isAbsolute(cwd) || !(await fs.stat(cwd).then((s) => s.isDirectory()).catch(() => false))) {
     return NextResponse.json({ error: `No folder at ${cwd || "(empty)"} on the server.` }, { status: 400 });
   }
-  const run = startRun({ cwd, model: str(body.model) || undefined, permissionMode: parseMode(body.permissionMode) ?? "default" });
+  const profile = pickProfile("claude", body.profile, null);
+  const model = str(body.model) || undefined;
+  const mode = parseMode(body.permissionMode) ?? "default";
+  const run = startRun({ cwd, model, permissionMode: mode, profile });
   run.send(text);
   const id = await Promise.race([run.sessionId(), new Promise<string>((r) => setTimeout(() => r(""), 90_000))]);
   if (!id) {
     run.close();
     return NextResponse.json({ error: run.state.error ?? "Claude didn't start within 90 seconds." }, { status: 502 });
   }
+  setSessionProfile(id, profile.id);
+  guardTurn({ key: id, text, mode, model, profile });
   return NextResponse.json({ id });
 }
