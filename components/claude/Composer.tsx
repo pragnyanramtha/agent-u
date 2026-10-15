@@ -266,6 +266,11 @@ export function Composer({
   }, [openMenu]);
 
   /* close on Escape, outside taps, or focus leaving the composer; return focus to the trigger */
+  const [modelQ, setModelQ] = useState("");
+  useEffect(() => {
+    if (openMenu !== "pick") setModelQ("");
+  }, [openMenu]);
+
   const closeMenu = useCallback(
     (refocus: boolean) => {
       const trigger = menu === "pick" ? pickRef.current : menu === "plus" ? plusRef.current : inputRef.current;
@@ -372,6 +377,37 @@ export function Composer({
       {m.key === "" && model && !list.some((x) => x.key === model) && <span className="truncate text-[12px] text-ink-3">{modelName(model)}</span>}
       {on && <Check width={15} height={15} strokeWidth={2.2} className="ml-auto shrink-0 text-ink" aria-hidden />}
     </button>
+  );
+
+  /* long CLI lists (Cursor has hundreds) get a filter; Default and the current model stay visible */
+  const q = modelQ.trim().toLowerCase();
+  const shownModels = q ? models.filter((m) => m.key === "" || m.key === model || `${m.key} ${m.name}`.toLowerCase().includes(q)) : models;
+  const modelList = (
+    <>
+      {models.length > 12 && (
+        <div className="px-1.5 pb-1">
+          <input
+            value={modelQ}
+            onChange={(e) => setModelQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Home" || e.key === "End") e.stopPropagation();
+            }}
+            placeholder={`Filter ${models.length - 1} models…`}
+            aria-label="Filter models"
+            className="h-9 w-full rounded-[8px] bg-inset px-2.5 text-[13px] text-ink shadow-hairline outline-none placeholder:text-ink-3 focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
+            autoComplete="off"
+            spellCheck={false}
+            autoCapitalize="off"
+          />
+        </div>
+      )}
+      {shownModels.map((m) =>
+        modelRow(m, models, modelOn(m.key, models), () => {
+          onModelChange(m.key);
+          closeMenu(true);
+        }),
+      )}
+    </>
   );
 
   /* CLI agents accept model ids their list may not show (new releases, other providers) */
@@ -520,12 +556,7 @@ export function Composer({
                 {agent !== "claude" && (
                   <div role="group" aria-label={`${agentLabel} model`}>
                     <MenuLabel>{`${agentLabel} model`}</MenuLabel>
-                    {models.map((m) =>
-                      modelRow(m, models, modelOn(m.key, models), () => {
-                        onModelChange(m.key);
-                        closeMenu(true);
-                      }),
-                    )}
+                    {modelList}
                     {otherModelRow}
                   </div>
                 )}
@@ -533,12 +564,7 @@ export function Composer({
             ) : (
               <div role="group" aria-label="Model">
                 <MenuLabel>Model</MenuLabel>
-                {models.map((m) =>
-                  modelRow(m, models, modelOn(m.key, models), () => {
-                    onModelChange(m.key);
-                    closeMenu(true);
-                  }),
-                )}
+                {modelList}
                 {otherModelRow}
               </div>
             )}
