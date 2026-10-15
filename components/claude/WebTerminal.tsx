@@ -13,15 +13,16 @@ type Conn = "connecting" | "open" | "reconnecting" | "ended";
 /* keys phones don't have; sent as raw terminal sequences. "ctrl"/"alt" arm a modifier for the next key. */
 const KEYS: [string, string][] = [
   ["Esc", "\x1b"],
-  ["Ctrl", "ctrl"],
-  ["Alt", "alt"],
+  ["^C", "\x03"],
   ["Tab", "\t"],
-  ["⇧Tab", "\x1b[Z"],
   ["↑", "\x1b[A"],
   ["↓", "\x1b[B"],
+  ["Enter", "\r"],
+  ["Ctrl", "ctrl"],
   ["←", "\x1b[D"],
   ["→", "\x1b[C"],
-  ["^C", "\x03"],
+  ["⇧Tab", "\x1b[Z"],
+  ["Alt", "alt"],
   ["^D", "\x04"],
   ["^R", "\x12"],
   ["Home", "\x1b[H"],
@@ -32,7 +33,6 @@ const KEYS: [string, string][] = [
   ["/", "/"],
   ["~", "~"],
   ["-", "-"],
-  ["Enter", "\r"],
 ];
 
 /* One Dark-ish, matched to the app's dark page */
@@ -407,7 +407,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
           <div ref={hostRef} className="absolute inset-0 px-1.5 pt-1.5" />
           {!output && conn !== "ended" && <p className="pointer-events-none absolute inset-x-0 top-1/3 text-center font-mono text-[12px] text-[#6b7079]">{conn === "open" ? "Waiting for the terminal…" : "Connecting…"}</p>}
         </div>
-        <div className="no-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 px-2 py-1.5 lg:hidden" role="toolbar" aria-label="Terminal keys">
+        <div className="no-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 px-2 py-1.5 [mask-image:linear-gradient(to_right,black_88%,transparent)] lg:hidden" role="toolbar" aria-label="Terminal keys">
           <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => void paste()} className="h-8 shrink-0 rounded-[7px] bg-white/[0.06] px-2.5 font-mono text-[12px] text-[#c9ccd3] active:bg-white/15">
             Paste
           </button>

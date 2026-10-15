@@ -32,4 +32,7 @@ export function timeAgo(ms: number, now = Date.now()) {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export const shortPath = (p: string) => p.replace(/^\/home\/[^/]+/, "~");
+/* "~" only for the server user's own home; other users' folders (/home/pik) stay spelled out */
+let serverHome: string | null = null;
+export const setServerHome = (h: string | undefined) => void (h && h !== "/" && (serverHome = h.replace(/\/+$/, "")));
+export const shortPath = (p: string) => (serverHome && (p === serverHome || p.startsWith(`${serverHome}/`)) ? `~${p.slice(serverHome.length)}` : p);

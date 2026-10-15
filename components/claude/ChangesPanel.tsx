@@ -1,5 +1,6 @@
 "use client";
 
+import { isPlainText } from "@/lib/client/highlight";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavArrowDown, Xmark } from "iconoir-react";
 import type { Entry, ToolResult } from "@/lib/types";
@@ -118,7 +119,7 @@ export function ChangesPanel({ changes, cwd, partial, onClose }: { changes: File
                     {f.edits.map((ed, i) => (
                       <div key={i} className={ed.failed ? "opacity-50" : ""}>
                         {ed.failed && <p className="mb-1 text-[11.5px] text-red-ink">This edit failed and wasn&apos;t applied.</p>}
-                        <DiffBlock before={ed.before} after={ed.after} />
+                        <DiffBlock before={ed.before} after={ed.after} plain={isPlainText(f.path)} />
                       </div>
                     ))}
                   </div>

@@ -243,10 +243,12 @@ export function Composer({
 
   const slashQuery = /^\/([\w:-]*)$/.exec(draft)?.[1];
   const allCommands = useMemo(() => {
-    const known = new Set(catalog.map((c) => c.name));
+    /* Claude Code's commands and skills mean nothing to the other CLIs */
+    const disk = agent === "claude" ? catalog : [];
+    const known = new Set(disk.map((c) => c.name));
     const live = slashCommands.filter((n) => !known.has(n)).map((name): SlashItem => ({ name, description: "", kind: "command" }));
-    return [...(onAppCommand ? APP_COMMANDS : []), ...catalog, ...live];
-  }, [catalog, slashCommands, onAppCommand]);
+    return [...(onAppCommand ? APP_COMMANDS : []), ...disk, ...live];
+  }, [catalog, slashCommands, onAppCommand, agent]);
   /* "Commands" in the + menu opens the list without touching the text; picking one prefixes it */
   const forcedSlash = menu === "slash";
   const commands = slashQuery !== undefined ? rankCommands(allCommands, slashQuery) : forcedSlash ? rankCommands(allCommands, "") : [];
@@ -401,12 +403,16 @@ export function Composer({
           />
         </div>
       )}
-      {shownModels.map((m) =>
-        modelRow(m, models, modelOn(m.key, models), () => {
-          onModelChange(m.key);
-          closeMenu(true);
-        }),
-      )}
+      {/* long lists scroll on their own so the approvals below stay in reach */}
+      <div className={models.length > 12 ? "max-h-[min(36dvh,300px)] overflow-y-auto overscroll-contain" : undefined}>
+        {shownModels.map((m) =>
+          modelRow(m, models, modelOn(m.key, models), () => {
+            onModelChange(m.key);
+            closeMenu(true);
+          }),
+        )}
+        {q && shownModels.every((m) => m.key === "" || m.key === model) && <p className="px-2.5 py-1.5 text-[12.5px] text-ink-3">No models match.</p>}
+      </div>
     </>
   );
 
@@ -418,7 +424,7 @@ export function Composer({
         role="menuitem"
         onClick={() => {
           closeMenu(true);
-          void promptAsk({ title: `${agentLabel} model`, body: "Any model id the CLI accepts.", confirm: "Use model", value: model ?? "" }).then((m) => m && onModelChange(m));
+          void promptAsk({ title: `${agentLabel} model`, body: "Any model id the CLI accepts.", confirm: "Use model", value: modelQ.trim() || model || "" }).then((m) => m && onModelChange(m));
         }}
         className={`${menuRow} text-ink-2`}
       >

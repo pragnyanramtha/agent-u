@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "iconoir-react";
-import { highlight } from "@/lib/client/highlight";
+import { highlight, isPlainText } from "@/lib/client/highlight";
 import { PathLabel } from "./PathLabel";
 
 /** Copies text, falling back to a hidden textarea where the async clipboard API is unavailable (plain-http tunnels). */
@@ -29,6 +29,7 @@ export async function copyText(text: string) {
 
 /** Beautiful UI's CodeBlock card, fed real content: header with the language, copy, line gutter. */
 export function CodeCard({ code, label }: { code: string; label?: string }) {
+  const plain = isPlainText(label);
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -67,7 +68,7 @@ export function CodeCard({ code, label }: { code: string; label?: string }) {
             <div key={i} className="grid items-start" style={{ gridTemplateColumns: `${gutter} minmax(0,1fr)` }}>
               {/* sticky so line numbers stay put while long lines scroll sideways */}
               <span className="sticky left-0 border-r border-line bg-surface pr-2 text-right text-[11px] text-ink-3 tabular-nums select-none">{i + 1}</span>
-              <code className="pr-4 pl-2 whitespace-pre">{highlight(line)}</code>
+              <code className="pr-4 pl-2 whitespace-pre">{plain ? line : highlight(line)}</code>
             </div>
           ))}
         </div>

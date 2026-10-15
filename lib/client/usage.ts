@@ -10,8 +10,16 @@ export type Tokens = { input: number; cacheRead: number; cacheWrite: number; out
 /** Tokens the request saw: uncached input plus cache reads and writes. */
 export const contextUsed = (u: Tokens) => u.input + u.cacheRead + u.cacheWrite;
 
-/* Claude Code 2.x runs current models with a 1M window; older claude-3 models had 200k. */
-export const contextWindow = (u: UsageEntry) => (/claude-3/.test(u.model) && contextUsed(u) <= 200_000 ? 200_000 : 1_000_000);
+/* The agent's own figure when it records one (Codex, Cursor). Claude Code 2.x runs current models with a 1M window;
+ * older claude-3 models had 200k. Other agents' models without a figure: 200k unless the name says 1M, or usage passed it. */
+export function contextWindow(u: UsageEntry) {
+  if (u.window) return u.window;
+  const used = contextUsed(u);
+  const claudeCode = /^(claude-|opus|sonnet|haiku)/i.test(u.model) && !u.model.includes("/");
+  if (claudeCode) return /claude-3/.test(u.model) && used <= 200_000 ? 200_000 : 1_000_000;
+  if (/\b1m\b/i.test(u.model) || used > 200_000) return 1_000_000;
+  return 200_000;
+}
 
 export type ContextState = { used: number; window: number; pct: number; cached: number; newlyCached: number; uncached: number; free: number; output: number; model: string };
 

@@ -18,7 +18,7 @@ export type Entry =
   | { kind: "result"; id: string; ts: string; toolUseId: string; result: ToolResult }
   | { kind: "notice"; id: string; ts: string; tone: "info" | "warn"; text: string }
   /** token usage of one assistant message (the context it saw), for the context ring */
-  | { kind: "usage"; id: string; ts: string; model: string; input: number; cacheRead: number; cacheWrite: number; output: number };
+  | { kind: "usage"; id: string; ts: string; model: string; input: number; cacheRead: number; cacheWrite: number; output: number; /** the model's context window, when the agent records it */ window?: number };
 
 export type TerminalInfo = {
   pid: number;

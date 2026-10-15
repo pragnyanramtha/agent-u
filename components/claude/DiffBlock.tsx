@@ -1,11 +1,11 @@
 import { compact, lineDiff } from "@/lib/client/diff";
-import { highlight } from "@/lib/client/highlight";
+import { highlight, isPlainText } from "@/lib/client/highlight";
 import { PathLabel } from "./PathLabel";
 
 const HATCH = "repeating-linear-gradient(45deg, var(--red) 0, var(--red) 1.5px, transparent 1.5px, transparent 3px)";
 
 /** Beautiful UI's CodeBlock diff view: one gutter, tinted rows, green bar for adds, hatched red for removals. */
-export function DiffBlock({ before, after, file }: { before: string; after: string; file?: string }) {
+export function DiffBlock({ before, after, file, plain = isPlainText(file) }: { before: string; after: string; file?: string; plain?: boolean }) {
   const lines = lineDiff(before, after);
   const rows = compact(lines);
   const added = lines.filter((l) => l.tone === "add").length;
@@ -36,7 +36,7 @@ export function DiffBlock({ before, after, file }: { before: string; after: stri
                 <span className={`select-none pr-2 text-right text-[11px] tabular-nums ${r.tone === "add" ? "text-green" : r.tone === "del" ? "text-red" : "text-ink-3"}`}>
                   {r.tone === "del" ? r.old : r.cur}
                 </span>
-                <code className="pr-4 pl-2 whitespace-pre">{highlight(r.text)}</code>
+                <code className="pr-4 pl-2 whitespace-pre">{plain ? r.text : highlight(r.text)}</code>
               </div>
             ),
           )}

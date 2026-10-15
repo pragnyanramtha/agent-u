@@ -2,19 +2,22 @@
 
 import { useEffect, useState } from "react";
 import type { AgentId, ProfileInfo } from "@/lib/types";
-import { api } from "./api";
+import { api, setServerHome } from "./api";
 
 /* Agent profiles from /api/profiles, shared by every screen; saving in settings refreshes them all. */
 
 export const PROFILES_CHANGED = "agentu:profiles";
-type Data = { profiles: ProfileInfo[]; configPath: string };
+type Data = { profiles: ProfileInfo[]; configPath: string; home?: string };
 let cache: Data | null = null;
 let inflight: Promise<Data> | null = null;
 
 function load(force = false): Promise<Data> {
   if (cache && !force) return Promise.resolve(cache);
   inflight ??= api<Data>("/api/profiles")
-    .then((d) => (cache = d))
+    .then((d) => {
+      setServerHome(d.home);
+      return (cache = d);
+    })
     .finally(() => (inflight = null));
   return inflight;
 }

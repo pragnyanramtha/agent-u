@@ -11,6 +11,9 @@ const KEYWORDS = new Set([
 const TOKEN =
   /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`]*`|#.*$|\/\/.*$|\b\d+(?:\.\d+)?\b|\b(?:import|from|export|default|async|function|const|let|var|await|return|if|else|for|while|new|throw|try|catch|null|true|false|undefined|def|class|self|None|True|False|fn|pub|use|struct|impl|match|elif|in|not|and|or|type|interface)\b|[A-Za-z_$][\w$]*(?=\s*\())/g;
 
+/** prose and data files read better uncoloured ("for", "and", "from" aren't keywords there) */
+export const isPlainText = (name?: string) => !!name && (/\.(txt|log|csv|tsv|rst|md|mdx|markdown)$/i.test(name) || /^(text|txt|plain|plaintext|log|markdown|md)$/i.test(name));
+
 export function highlight(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;

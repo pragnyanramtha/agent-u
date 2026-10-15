@@ -102,6 +102,9 @@ export function FolderPicker({
   const expanded = expand(query.trim());
   const pathDir = pathMode ? expanded.slice(0, expanded.lastIndexOf("/") + 1) || "/" : "";
   const leaf = pathMode ? expanded.slice(expanded.lastIndexOf("/") + 1).toLowerCase() : query.trim().toLowerCase();
+  /* "/home/ubuntu" typed without the last slash means that folder, not the one being listed (/home) */
+  const typedDir = pathMode && leaf ? data?.dirs.find((d) => d.name === expanded.slice(expanded.lastIndexOf("/") + 1)) : undefined;
+  const chosen = typedDir?.path ?? data?.path;
 
   useEffect(() => {
     if (!open || !pathMode || !home) return;
@@ -158,7 +161,7 @@ export function FolderPicker({
         return;
       case "Enter":
         e.preventDefault();
-        if (e.ctrlKey || e.metaKey) return data && pick(data.path);
+        if (e.ctrlKey || e.metaKey) return chosen && pick(chosen);
         if (pathMode && !items.length && expanded) {
           void browse(expanded.replace(/(.)\/+$/, "$1")).then((ok) => ok && setQuery(""));
           return;
@@ -368,13 +371,13 @@ export function FolderPicker({
         </div>
 
         <div className="flex shrink-0 items-center gap-2 border-t border-line py-2.5 pr-2.5 pl-4">
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3" title={data?.path} translate="no">
-            {data ? shortPath(data.path) : "\u00a0"}
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3" title={chosen} translate="no">
+            {chosen ? shortPath(chosen) : "\u00a0"}
           </span>
           <button
             type="button"
-            disabled={!data}
-            onClick={() => data && pick(data.path)}
+            disabled={!chosen}
+            onClick={() => chosen && pick(chosen)}
             title="Use this folder (Ctrl+Enter)"
             className="tap relative h-10 shrink-0 rounded-full bg-ink px-4 text-[13.5px] font-medium text-surface transition-[opacity,transform] duration-150 enabled:active:scale-[0.97] disabled:opacity-40 sm:h-8 sm:text-[13px]"
           >

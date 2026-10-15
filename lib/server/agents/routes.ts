@@ -16,6 +16,8 @@ import { pickProfile, setSessionProfile, withProfile } from "../profiles";
 
 const notFound = () => NextResponse.json({ error: "Session not found" }, { status: 404 });
 const modes = new Map<string, PermissionMode>();
+/** their print modes can't ask for approval on the web, so unattended turns may act (the UI shows Bypass) */
+const DEFAULT_MODE: PermissionMode = "bypassPermissions";
 
 /* Messages sent while a web-driven turn runs wait here and go out, in order, when it ends
  * (or is stopped): the CLIs take one prompt per turn. Keyed by session key; the item id is
@@ -133,7 +135,7 @@ export async function agentHistory(agent: AgentId, native: string, before: strin
     cursor: page.cursor,
     end: page.end,
     terminal,
-    run: toRunState(key, a.runState(native), modes.get(key) ?? "default", session?.model ?? null),
+    run: toRunState(key, a.runState(native), modes.get(key) ?? DEFAULT_MODE, session?.model ?? null),
     title: handoffTitle(session?.title ?? "") || `New ${a.label} session`,
     cwd: session?.cwd ?? "",
     permissionMode: modes.get(key) ?? null,
@@ -167,7 +169,7 @@ export async function agentEvents(req: NextRequest, agent: AgentId, native: stri
           cleanup();
         }
       };
-      const runOf = () => toRunState(key, a.runState(native), modes.get(key) ?? "default", session?.model ?? null);
+      const runOf = () => toRunState(key, a.runState(native), modes.get(key) ?? DEFAULT_MODE, session?.model ?? null);
       send({ type: "history", entries: [], cursor: null, terminal, run: runOf(), title: handoffTitle(session?.title ?? "") || `New ${a.label} session`, cwd: session?.cwd ?? "", permissionMode: modes.get(key) ?? null, profile: pickProfile(agent, null, key).id });
       /* always: a queue lost to a restart must clear what the client still shows */
       send(queueEvent(key));
@@ -219,7 +221,7 @@ export async function agentMessage(agent: AgentId, native: string, body: Record<
   const text = str(body.text)?.trim();
   if (!text) return NextResponse.json({ error: "Message is empty." }, { status: 400 });
   const key = sessionKey(agent, native);
-  const mode = parseMode(body.permissionMode) ?? modes.get(key) ?? "default";
+  const mode = parseMode(body.permissionMode) ?? modes.get(key) ?? DEFAULT_MODE;
   modes.set(key, mode);
 
   const terminal = await terminalOf(a, native);
@@ -264,7 +266,7 @@ export async function agentStart(agent: AgentId, body: Record<string, unknown>) 
   if (!cwd || !path.isAbsolute(cwd) || !(await fs.stat(cwd).then((s) => s.isDirectory()).catch(() => false))) {
     return NextResponse.json({ error: `No folder at ${cwd || "(empty)"} on the server.` }, { status: 400 });
   }
-  const mode = parseMode(body.permissionMode) ?? "default";
+  const mode = parseMode(body.permissionMode) ?? DEFAULT_MODE;
   const profile = chosen;
   const model = str(body.model) || profile.defaultModel || profile.models?.[0] || undefined;
   try {

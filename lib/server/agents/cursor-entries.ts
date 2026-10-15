@@ -121,7 +121,7 @@ function fromTurns(chat: StoreChat, opts: StoreEntryOptions): Entry[] {
     });
   });
   if (chat.tokens && chat.tokens.used > 0 && lastKey)
-    out.push({ kind: "usage", id: `${lastKey}.usage.${chat.tokens.used}`, ts: iso(last), model: model ?? "cursor", input: chat.tokens.used, cacheRead: 0, cacheWrite: 0, output: 0 });
+    out.push({ kind: "usage", id: `${lastKey}.usage.${chat.tokens.used}`, ts: iso(last), model: model ?? "cursor", input: chat.tokens.used, cacheRead: 0, cacheWrite: 0, output: 0, ...(chat.tokens.max > 0 ? { window: chat.tokens.max } : {}) });
   return out;
 }
 
@@ -169,6 +169,6 @@ function fromMessages(chat: StoreChat, opts: StoreEntryOptions): Entry[] {
   const tail = out[out.length - 1];
   if (opts.holdTail && tail && (tail.kind === "text" || tail.kind === "thinking")) out.pop();
   if (chat.tokens && chat.tokens.used > 0 && out.length)
-    out.push({ kind: "usage", id: `m${chat.messages.length}.usage.${chat.tokens.used}`, ts: iso(last), model: model ?? "cursor", input: chat.tokens.used, cacheRead: 0, cacheWrite: 0, output: 0 });
+    out.push({ kind: "usage", id: `m${chat.messages.length}.usage.${chat.tokens.used}`, ts: iso(last), model: model ?? "cursor", input: chat.tokens.used, cacheRead: 0, cacheWrite: 0, output: 0, ...(chat.tokens.max > 0 ? { window: chat.tokens.max } : {}) });
   return out;
 }

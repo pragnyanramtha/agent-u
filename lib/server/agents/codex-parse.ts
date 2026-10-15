@@ -441,7 +441,8 @@ export function parseRecord(rec: CodexRecord, base: string, ctx: ParseCtx): Entr
       ctx.lastTotal = total;
       const n = (k: string) => (typeof u[k] === "number" ? (u[k] as number) : 0);
       const cached = n("cached_input_tokens");
-      return [{ kind: "usage", id: `${base}:usage`, ts, model: ctx.model, input: Math.max(0, n("input_tokens") - cached), cacheRead: cached, cacheWrite: n("cache_write_input_tokens"), output: n("output_tokens") }];
+      const window = typeof info.model_context_window === "number" && info.model_context_window > 0 ? info.model_context_window : undefined;
+      return [{ kind: "usage", id: `${base}:usage`, ts, model: ctx.model, input: Math.max(0, n("input_tokens") - cached), cacheRead: cached, cacheWrite: n("cache_write_input_tokens"), output: n("output_tokens"), ...(window ? { window } : {}) }];
     }
     if (pt === "task_complete") {
       const msg = str(obj(p.error).message);

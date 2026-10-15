@@ -78,15 +78,16 @@ export function SessionScreen({
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
+  const agent: AgentId = id.includes(":") ? (id.slice(0, id.indexOf(":")) as AgentId) : "claude";
   const run = view.run && view.run.status !== "closed" ? view.run : null;
   /* a failed run stays on screen (its error, its last state) but can't take mode/model/stop changes; the next send starts fresh */
   const live = run && run.status !== "error" ? run : null;
   const terminal = view.terminal;
   const busy = run ? run.status === "running" || run.status === "starting" : terminalBusy(terminal?.status);
-  const mode = live?.permissionMode ?? localMode ?? run?.permissionMode ?? view.permissionMode ?? "default";
+  /* other agents' print modes can't ask for approval on the web, so like new sessions they default to Bypass */
+  const mode = live?.permissionMode ?? localMode ?? run?.permissionMode ?? view.permissionMode ?? (agent === "claude" ? "default" : "bypassPermissions");
   const model = localModel ?? run?.model ?? null;
   const where = terminal ? (terminal.headless ? "another program" : (terminal.multiplexer ?? "a terminal")) : null;
-  const agent: AgentId = id.includes(":") ? (id.slice(0, id.indexOf(":")) as AgentId) : "claude";
   const agentName = AGENT_LABEL[agent];
   const profileId = localProfile ?? view.profile ?? agent;
   const profileInfo = profiles?.find((p) => p.id === profileId);
@@ -536,7 +537,7 @@ export function SessionScreen({
             )}
             <Composer
               draftKey={id}
-              placeholder={terminal && !run ? `Type into ${where}…` : `Reply to ${agentName}…`}
+              placeholder={terminal && !run ? (/^(zellij|tmux)/.test(terminal.multiplexer ?? "") ? `Type into ${where}…` : `Running in ${where}. Reply there.`) : `Reply to ${agentName}…`}
               onSend={send}
               running={Boolean(busy && (run || terminal))}
               onStop={() => (live ? void control("interrupt") : void pressKey("Escape"))}
