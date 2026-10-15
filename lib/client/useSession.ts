@@ -15,7 +15,11 @@ export type Pending = {
   error?: string;
   /** the server took it (so its client id is spent) but it never ran: a retry must go out as a new send */
   resend?: boolean;
+  /** the client id the server knows it by (a fresh retry gets a new one) */
+  sentAs?: string;
 };
+
+export const serverId = (p: Pending) => p.sentAs ?? p.localId;
 
 /* the terminal path flattens newlines, and Claude Code trims; compare on collapsed whitespace */
 const norm = (s: string) => s.replace(/\s+/g, " ").trim().replace(/^!\s+/, "!");
@@ -100,7 +104,7 @@ export type SessionView = {
   queue: string[];
 };
 
-type Action =
+export type Action =
   | { type: "event"; event: ServerEvent; initial?: boolean }
   | { type: "older"; entries: Entry[]; cursor: number | null }
   | { type: "loadingOlder" }
@@ -111,7 +115,7 @@ type Action =
   | { type: "restorePending"; pending: Pending[] }
   | { type: "dropPending"; localId: string };
 
-const initial = (): SessionView => ({
+export const initial = (): SessionView => ({
   status: "connecting",
   entries: [],
   ids: new Set(),
@@ -185,7 +189,7 @@ function merge(state: SessionView, batch: Entry[], where: "append" | "prepend"):
   };
 }
 
-function reducer(state: SessionView, action: Action): SessionView {
+export function reducer(state: SessionView, action: Action): SessionView {
   switch (action.type) {
     case "event": {
       const e = action.event;
@@ -211,6 +215,11 @@ function reducer(state: SessionView, action: Action): SessionView {
       if (e.type === "terminal") return { ...state, terminal: e.terminal };
       if (e.type === "title") return { ...state, title: e.title };
       if (e.type === "queue") return { ...state, queue: e.items.map((q) => q.id) };
+      if (e.type === "unsent") {
+        const lost = new Map(e.items.map((u) => [u.id, u.error]));
+        if (!state.pending.some((p) => p.state === "sent" && lost.has(serverId(p)))) return state;
+        return { ...state, pending: state.pending.map((p) => (p.state === "sent" && lost.has(serverId(p)) ? { ...p, state: "failed" as const, resend: true, error: lost.get(serverId(p)) } : p)) };
+      }
       if (e.type === "run") {
         const ended = !e.run || e.run.status === "idle" || e.run.status === "closed" || e.run.status === "error";
         /* a run that failed won't read what it was handed: those bubbles get Retry (same client id, so no double send) */

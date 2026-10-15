@@ -6,7 +6,7 @@ import { AGENT_LABEL, type AgentId, type PermissionMode, type ServerTerminal } f
 import { AGENT_TONE, AgentMark } from "./SessionList";
 import { OPEN_TERMINAL_EVENT } from "./CommandPalette";
 import { api, ApiError, shortPath } from "@/lib/client/api";
-import { useSession } from "@/lib/client/useSession";
+import { serverId, useSession } from "@/lib/client/useSession";
 import { postReliably } from "@/lib/client/send";
 import { openServerTerminal } from "@/lib/client/terminals";
 import { profileModels, useAgentModels, useProfiles } from "@/lib/client/useProfiles";
@@ -141,12 +141,13 @@ export function SessionScreen({
   /* the bubble stays until the message shows up in the transcript; failures stay visible with Retry */
   const deliver = useCallback(
     async (localId: string, text: string, fresh = false) => {
-      updatePending(localId, { state: "sending", error: undefined, resend: undefined, at: Date.now() });
+      const clientId = fresh ? `${localId}-${Date.now().toString(36)}` : localId;
+      updatePending(localId, { state: "sending", error: undefined, resend: undefined, at: Date.now(), sentAs: clientId });
       try {
         const res = await postReliably<{ id: string; via?: "terminal" | "web" | "queued"; cleared?: string | null }>(
           `/api/sessions/${id}/message`,
           { text, model: localModel ?? undefined, permissionMode: localMode ?? undefined, profile: localProfile ?? undefined },
-          fresh ? `${localId}-${Date.now().toString(36)}` : localId,
+          clientId,
         );
         updatePending(localId, { state: "sent", via: res.via, at: Date.now() });
         /* a greyed suggestion or half-typed text was in the terminal's prompt; say what was cleared */
@@ -500,14 +501,14 @@ export function SessionScreen({
             where={where}
             agentName={agentName}
             claudeBusy={Boolean(busy)}
-            queued={p.via === "queued" && view.queue.includes(p.localId)}
+            queued={p.via === "queued" && view.queue.includes(serverId(p))}
             onRetry={() => void deliver(p.localId, p.text, p.resend)}
             onDiscard={() => dropPending(p.localId)}
             onUnqueue={() => {
               dropPending(p.localId);
-              void control("unqueue", p.localId);
+              void control("unqueue", serverId(p));
             }}
-            onSendNow={() => void control("sendQueued", p.localId)}
+            onSendNow={() => void control("sendQueued", serverId(p))}
           />
         )}
         bottomPad={composerH}

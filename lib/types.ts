@@ -134,4 +134,6 @@ export type ServerEvent =
   | { type: "redirect"; sessionId: string }
   /** messages waiting for the running turn of a non-Claude agent to end, oldest first */
   | { type: "queue"; items: { id: string; text: string }[] }
+  /** messages whose turn was stopped before the agent saved them (it never read them) */
+  | { type: "unsent"; items: { id: string; text: string; error: string }[] }
   | { type: "ping" };

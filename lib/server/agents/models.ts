@@ -24,7 +24,7 @@ const lines = (out: string) => out.replace(ANSI, "").replace(/[\u200b-\u200d\ufe
 const ID = /^[A-Za-z0-9][\w.:/@-]*$/;
 
 /** `id - Name` rows (cursor-agent models); a trailing "(current, default)" is dropped */
-function dashRows(out: string): ModelChoice[] {
+export function dashRows(out: string): ModelChoice[] {
   const rows: ModelChoice[] = [];
   for (const l of lines(out)) {
     const m = /^(\S+)\s+-\s+(.+?)(?:\s+\((?:current|default)[^)]*\))?$/.exec(l);

@@ -30,6 +30,48 @@ const drains: Map<string, () => void> = (g.__agentuDrains ??= new Map());
 const queueEvent = (key: string): ServerEvent => ({ type: "queue", items: (queues.get(key) ?? []).map(({ id, text }) => ({ id, text })) });
 const announce = (key: string) => postToSession(key, queueEvent(key));
 
+/* Some CLIs (Cursor) only save a prompt after the turn's first step, so a turn stopped before that leaves no
+ * trace and the agent never read the message. Turns the user stopped are checked once they end; prompts that
+ * didn't land are reported, so the client can offer Retry instead of waiting for them forever. */
+type Unsent = { id: string; text: string; error: string };
+const unsent: Map<string, Unsent[]> = ((g as { __agentuUnsent?: Map<string, Unsent[]> }).__agentuUnsent ??= new Map());
+/** "<key>@<startedAt>" of turns stopped from the web */
+const stoppedTurns: Set<string> = ((g as { __agentuStopped?: Set<string> }).__agentuStopped ??= new Set());
+const unsentEvent = (key: string): ServerEvent => ({ type: "unsent", items: unsent.get(key) ?? [] });
+const squash = (s: string) => s.replace(/\s+/g, " ").trim();
+
+async function stopRunning(a: { runState(n: string): { status: string; startedAt: number } | null; stop(n: string): Promise<void> }, native: string, key: string) {
+  const s = a.runState(native);
+  if (s?.status !== "running") return;
+  stoppedTurns.add(`${key}@${s.startedAt}`);
+  await a.stop(native);
+}
+
+/** Once the turn that `text` started ends, reports it if the turn was stopped before the agent saved the prompt. */
+async function checkLanding(agent: AgentId, native: string, id: string, text: string) {
+  const a = await adapterFor(agent);
+  const started = a?.runState(native)?.startedAt;
+  if (!a || started === undefined) return;
+  const key = sessionKey(agent, native);
+  const turn = `${key}@${started}`;
+  const ended = async () => {
+    if (!stoppedTurns.delete(turn)) return;
+    /* the store is written as the process exits; give it a moment */
+    await new Promise((r) => setTimeout(r, 2500));
+    const page = await a.history(native, null).catch(() => null);
+    const want = squash(text);
+    if (!page || page.entries.some((e) => e.kind === "user" && squash(e.text).includes(want))) return;
+    unsent.set(key, [...(unsent.get(key) ?? []).filter((u) => u.id !== id), { id, text, error: `Stopped before ${a.label} saved it, so ${a.label} never read this.` }].slice(-20));
+    postToSession(key, unsentEvent(key));
+  };
+  /* another turn's state, emitted while this listener was being added, isn't this turn ending */
+  const off = onTurn(key, (s) => s.startedAt === started && s.status !== "running" && (off(), void ended()));
+  if (a.runState(native)?.startedAt !== started || a.runState(native)?.status !== "running") {
+    off();
+    void ended();
+  }
+}
+
 /** sessions with a send in flight (the CLI may not report "running" until its process is up) */
 const sending: Set<string> = ((g as { __agentuSending?: Set<string> }).__agentuSending ??= new Set());
 const busy = (a: { runState(n: string): { status: string } | null }, native: string, key: string) => sending.has(key) || a.runState(native)?.status === "running";
@@ -97,11 +139,11 @@ async function sendQueuedNow(agent: AgentId, native: string, id: string) {
   announce(key);
   const a = await adapterFor(agent);
   if (!a) return;
-  if (a.runState(native)?.status === "running") await a.stop(native);
+  if (a.runState(native)?.status === "running") await stopRunning(a, native, key);
   else void drain(agent, native);
 }
 
-async function sendNow(agent: AgentId, native: string, text: string, o: { model?: string; mode: PermissionMode; profile: unknown }): Promise<{ ok: true } | { ok: false; error: string; status: number; code?: string }> {
+async function sendNow(agent: AgentId, native: string, text: string, o: { id?: string; model?: string; mode: PermissionMode; profile: unknown }): Promise<{ ok: true } | { ok: false; error: string; status: number; code?: string }> {
   const a = await adapterFor(agent);
   if (!a) return { ok: false, error: "Session not found", status: 404 };
   const key = sessionKey(agent, native);
@@ -115,6 +157,7 @@ async function sendNow(agent: AgentId, native: string, text: string, o: { model?
   }
   setSessionProfile(key, profile.id);
   guardTurn({ key, text, mode: o.mode, model: o.model, profile });
+  if (o.id) void checkLanding(agent, native, o.id, text);
   return { ok: true };
 }
 
@@ -173,6 +216,7 @@ export async function agentEvents(req: NextRequest, agent: AgentId, native: stri
       send({ type: "history", entries: [], cursor: null, terminal, run: runOf(), title: handoffTitle(session?.title ?? "") || `New ${a.label} session`, cwd: session?.cwd ?? "", permissionMode: modes.get(key) ?? null, profile: pickProfile(agent, null, key).id });
       /* always: a queue lost to a restart must clear what the client still shows */
       send(queueEvent(key));
+      if (unsent.get(key)?.length) send(unsentEvent(key));
       cleanups.push(onSessionEvent(key, (e) => send(e)));
       cleanups.push(a.watch(native, start, (entries, end) => entries.length && send({ type: "entries", entries }, end)));
       cleanups.push(onTurn(key, () => send({ type: "run", run: runOf() })));
@@ -249,7 +293,7 @@ export async function agentMessage(agent: AgentId, native: string, body: Record<
     return NextResponse.json({ id: key, via: "queued" });
   }
   sending.add(key);
-  const res = await sendNow(agent, native, text, { model, mode, profile: body.profile }).finally(() => sending.delete(key));
+  const res = await sendNow(agent, native, text, { id: str(body.clientId), model, mode, profile: body.profile }).finally(() => sending.delete(key));
   void settle(agent, native);
   if (!res.ok) return NextResponse.json({ error: res.error, code: res.code }, { status: res.status });
   return NextResponse.json({ id: key, via: "web" });
@@ -288,7 +332,7 @@ export async function agentControl(agent: AgentId, native: string, body: Record<
   const a = await adapterFor(agent);
   if (!a) return notFound();
   const key = sessionKey(agent, native);
-  if (body.action === "interrupt" || body.action === "stop") await a.stop(native);
+  if (body.action === "interrupt" || body.action === "stop") await stopRunning(a, native, key);
   else if (body.action === "unqueue") unqueue(agent, native, str(body.value) ?? "");
   else if (body.action === "sendQueued") await sendQueuedNow(agent, native, str(body.value) ?? "");
   else if (body.action === "mode") {

@@ -1,0 +1,162 @@
+import { describe, expect, it } from "vitest";
+import { initial, reducer, serverId, type Pending, type SessionView } from "@/lib/client/useSession";
+import type { Entry, RunState, ServerEvent } from "@/lib/types";
+
+const now = Date.parse("2026-10-15T10:00:00Z");
+const iso = (ms: number) => new Date(ms).toISOString();
+const user = (id: string, text: string, at = now): Entry => ({ kind: "user", id, ts: iso(at), text, images: 0 });
+const pending = (localId: string, text: string, patch: Partial<Pending> = {}): Pending => ({ localId, text, at: now, state: "sent", via: "web", ...patch });
+const history = (entries: Entry[], run: RunState | null = null): Extract<ServerEvent, { type: "history" }> => ({
+  type: "history",
+  entries,
+  cursor: 5,
+  terminal: null,
+  run,
+  title: "t",
+  cwd: "/tmp",
+  permissionMode: null,
+});
+const run = (status: RunState["status"], error: string | null = null): RunState => ({
+  status,
+  model: null,
+  permissionMode: "default",
+  slashCommands: [],
+  pending: [],
+  error,
+  costUsd: null,
+  sessionId: "s",
+});
+const ev = (state: SessionView, event: ServerEvent, initialLoad = false) => reducer(state, { type: "event", event, initial: initialLoad });
+const withPending = (...p: Pending[]) => p.reduce((s, x) => reducer(s, { type: "pending", pending: x }), initial());
+
+describe("history loading", () => {
+  it("the first (GET) load replaces everything and sets the paging cursor", () => {
+    let s = ev(initial(), history([user("a", "old")]), true);
+    s = ev(s, history([user("b", "new")]), true);
+    expect(s.entries.map((e) => e.id)).toEqual(["b"]);
+    expect(s.cursor).toBe(5);
+  });
+
+  it("sets the cursor even when the first load only succeeded after retries", () => {
+    let s = reducer(initial(), { type: "status", status: "reconnecting" });
+    s = ev(s, history([user("a", "x")]), true);
+    expect(s.cursor).toBe(5);
+    expect(s.status).toBe("open");
+  });
+
+  it("stream reconnects only add, never reset or move the cursor", () => {
+    let s = ev(initial(), history([user("a", "x")]), true);
+    s = ev(s, { ...history([user("b", "y")]), cursor: 99 });
+    expect(s.entries.map((e) => e.id)).toEqual(["a", "b"]);
+    expect(s.cursor).toBe(5);
+  });
+
+  it("de-duplicates entries resent after a reconnect", () => {
+    let s = ev(initial(), history([user("a", "x")]), true);
+    s = ev(s, { type: "entries", entries: [user("a", "x"), user("b", "y")] });
+    expect(s.entries.map((e) => e.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("pending bubbles", () => {
+  it("drop when their message lands in the transcript", () => {
+    const s = ev(withPending(pending("p1", "hello  world")), { type: "entries", entries: [user("u1", "hello world", now + 1000)] });
+    expect(s.pending).toEqual([]);
+  });
+
+  it("only one bubble drops per landed message, oldest first", () => {
+    const s = ev(withPending(pending("p1", "yes"), pending("p2", "yes")), { type: "entries", entries: [user("u1", "yes", now + 1000)] });
+    expect(s.pending.map((p) => p.localId)).toEqual(["p2"]);
+  });
+
+  it("an older identical message (earlier in history) doesn't clear a new bubble", () => {
+    const s = ev(withPending(pending("p1", "continue")), { type: "entries", entries: [user("u0", "continue", now - 10 * 60_000)] });
+    expect(s.pending).toHaveLength(1);
+  });
+
+  it("loading older pages never clears a bubble", () => {
+    const s = reducer(withPending(pending("p1", "continue")), { type: "older", entries: [user("u0", "continue", now + 5000)], cursor: null });
+    expect(s.pending).toHaveLength(1);
+  });
+
+  it("shell-escape messages match with or without the space", () => {
+    const s = ev(withPending(pending("p1", "!ls -la")), { type: "entries", entries: [user("u1", "! ls -la", now + 1000)] });
+    expect(s.pending).toEqual([]);
+  });
+
+  it("a failed run turns delivered web bubbles into Retry, as a fresh send", () => {
+    const base = withPending(pending("p1", "a"), pending("p2", "b", { via: "terminal" }), pending("p3", "c", { state: "sending" }));
+    const s = ev(base, { type: "run", run: run("error", "No conversation found") });
+    const p1 = s.pending.find((p) => p.localId === "p1")!;
+    expect(p1.state).toBe("failed");
+    expect(p1.resend).toBe(true);
+    expect(p1.error).toContain("No conversation found");
+    expect(s.pending.find((p) => p.localId === "p2")!.state).toBe("sent");
+    expect(s.pending.find((p) => p.localId === "p3")!.state).toBe("sending");
+  });
+
+  it("a run that just goes idle leaves bubbles alone", () => {
+    const s = ev(withPending(pending("p1", "a")), { type: "run", run: run("idle") });
+    expect(s.pending[0].state).toBe("sent");
+  });
+
+  it("restoring after a reload skips ones that landed meanwhile", () => {
+    const s0 = ev(initial(), history([user("u1", "landed", now + 1000)]), true);
+    const s = reducer(s0, { type: "restorePending", pending: [pending("p1", "landed"), pending("p2", "still waiting")] });
+    expect(s.pending.map((p) => p.localId)).toEqual(["p2"]);
+  });
+});
+
+describe("queue events", () => {
+  it("track which bubbles the server is holding", () => {
+    let s = ev(initial(), { type: "queue", items: [{ id: "p1", text: "a" }, { id: "p2", text: "b" }] });
+    expect(s.queue).toEqual(["p1", "p2"]);
+    s = ev(s, { type: "queue", items: [] });
+    expect(s.queue).toEqual([]);
+  });
+});
+
+describe("unsent events", () => {
+  it("turn the bubble the server never delivered into Retry, matched by the id it was sent as", () => {
+    const base = withPending(pending("p1", "lost", { sentAs: "p1-retry2" }), pending("p2", "fine"), pending("p3", "lost too", { state: "failed" }));
+    const s = ev(base, { type: "unsent", items: [{ id: "p1-retry2", text: "lost", error: "Stopped before Cursor saved it" }, { id: "p3", text: "lost too", error: "x" }] });
+    expect(s.pending.find((p) => p.localId === "p1")).toMatchObject({ state: "failed", resend: true, error: "Stopped before Cursor saved it" });
+    expect(s.pending.find((p) => p.localId === "p2")!.state).toBe("sent");
+    expect(s.pending.find((p) => p.localId === "p3")!.error).toBeUndefined();
+  });
+
+  it("ignores ids it doesn't hold (a replay after the bubble was dropped)", () => {
+    const base = withPending(pending("p1", "a"));
+    expect(ev(base, { type: "unsent", items: [{ id: "gone", text: "x", error: "y" }] })).toBe(base);
+  });
+
+  it("the queue is matched by the id a retry was sent as", () => {
+    const p = pending("p1", "a", { sentAs: "p1-abc" });
+    expect(serverId(p)).toBe("p1-abc");
+    expect(serverId(pending("p2", "b"))).toBe("p2");
+  });
+});
+
+describe("live text", () => {
+  it("clears streams when the run ends", () => {
+    let s = ev(initial(), { type: "run", run: run("running") });
+    s = ev(s, { type: "delta", delta: { msgId: "m1", index: 0, kind: "text", text: "Hel" } });
+    s = ev(s, { type: "delta", delta: { msgId: "m1", index: 0, kind: "text", text: "lo" } });
+    expect(s.streams[0].text).toBe("Hello");
+    s = ev(s, { type: "run", run: run("idle") });
+    expect(s.streams).toEqual([]);
+  });
+
+  it("ignores another agent's live deltas once its turn is over", () => {
+    const s = ev(ev(initial(), { type: "run", run: run("idle") }), { type: "delta", delta: { msgId: "live:k:1:0", index: 0, kind: "text", text: "late" } });
+    expect(s.streams).toEqual([]);
+  });
+
+  it("a persisted text entry replaces the live stream it matches", () => {
+    let s = ev(initial(), { type: "run", run: run("running") });
+    s = ev(s, { type: "delta", delta: { msgId: "live:cursor:x:1:0", index: 0, kind: "text", text: "The answer is 42 and that is final." } });
+    s = ev(s, { type: "entries", entries: [{ kind: "text", id: "t1", ts: iso(now), msgId: "m9", text: "The answer is 42 and that is final." }] });
+    expect(s.streams).toEqual([]);
+    expect(s.entries).toHaveLength(1);
+  });
+});

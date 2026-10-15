@@ -108,7 +108,7 @@ export class InputRefused extends Error {
 
 /* one writer per pane: two sends interleaving would clear each other's half-typed text */
 const paneLocks = new Map<string, Promise<unknown>>();
-function withPane<T>(target: InputTarget, fn: () => Promise<T>): Promise<T> {
+export function withPane<T>(target: InputTarget, fn: () => Promise<T>): Promise<T> {
   const key = target.kind === "zellij" ? `zellij:${target.session}:${target.pane}` : `tmux:${target.pane}`;
   const prev = paneLocks.get(key) ?? Promise.resolve();
   const next = prev.catch(() => undefined).then(fn);
