@@ -120,6 +120,17 @@ await check("sessions list loads", async () => {
   assert(r.status === 200 && Array.isArray(r.body.sessions ?? r.body), `got ${r.status}`);
 });
 
+await check("push: a server key, the worker without a cookie, bad subscriptions refused", async () => {
+  const k = await get("/api/push");
+  assert(k.status === 200 && /^[A-Za-z0-9_-]{80,}$/.test(k.body?.publicKey ?? ""), `key: ${k.status}`);
+  const sw = await fetch(`${APP}/sw.js`, { redirect: "manual" });
+  assert(sw.status === 200 && (await sw.text()).includes("showNotification"), `sw.js: ${sw.status}`);
+  const bad = await post("/api/push", { subscription: { endpoint: "http://insecure.example/x", keys: { p256dh: "a", auth: "b" } } });
+  assert(bad.status === 400, `bad subscription: ${bad.status}`);
+  const anon = await fetch(`${APP}/api/push`, { redirect: "manual" });
+  assert(anon.status === 401, `no cookie: ${anon.status}`);
+});
+
 /* ── queue, dedupe, unqueue, transcript, context ──────── */
 
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "agentu-e2e-"));

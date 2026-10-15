@@ -6,6 +6,7 @@ import { AGENT_LABEL, type AgentId, type PermissionMode, type ServerTerminal } f
 import { AGENT_TONE, AgentMark } from "./SessionList";
 import { OPEN_TERMINAL_EVENT } from "./CommandPalette";
 import { api, ApiError, shortPath } from "@/lib/client/api";
+import { setBaseTitle } from "@/lib/client/attention";
 import { carryOver } from "@/lib/client/storage";
 import { serverId, useSession } from "@/lib/client/useSession";
 import { postReliably } from "@/lib/client/send";
@@ -143,7 +144,7 @@ export function SessionScreen({
   }, [view.entries]);
 
   useEffect(() => {
-    document.title = view.title ? `${view.title} · agent-u` : "agent-u";
+    setBaseTitle(view.title ? `${view.title} · agent-u` : "agent-u");
   }, [view.title]);
 
   const pendingRef = useRef(view.pending);

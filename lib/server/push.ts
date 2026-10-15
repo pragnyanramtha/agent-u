@@ -1,0 +1,90 @@
+import fs from "node:fs";
+import path from "node:path";
+import webpush from "web-push";
+import { CONFIG_DIR } from "./profiles";
+
+/* Web Push: one VAPID key pair for this server, and the browsers that asked for notifications. Kept next to the
+ * profiles config (not in the app folder, which every deploy replaces). */
+
+export type Subscription = { endpoint: string; keys: { p256dh: string; auth: string }; origin: string; ua: string; at: number };
+type Store = { publicKey: string; privateKey: string; subs: Subscription[] };
+
+export const PUSH_PATH = process.env.AGENT_U_PUSH || path.join(CONFIG_DIR, "push.json");
+const MAX_SUBS = 20;
+
+let cache: Store | null = null;
+
+function load(): Store {
+  if (cache) return cache;
+  try {
+    const raw = JSON.parse(fs.readFileSync(PUSH_PATH, "utf8")) as Partial<Store>;
+    if (raw.publicKey && raw.privateKey) return (cache = { publicKey: raw.publicKey, privateKey: raw.privateKey, subs: Array.isArray(raw.subs) ? raw.subs : [] });
+  } catch {}
+  const keys = webpush.generateVAPIDKeys();
+  cache = { ...keys, subs: [] };
+  write();
+  return cache;
+}
+
+function write() {
+  if (!cache) return;
+  fs.mkdirSync(path.dirname(PUSH_PATH), { recursive: true, mode: 0o700 });
+  const tmp = `${PUSH_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(cache, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, PUSH_PATH);
+}
+
+export const vapidPublicKey = () => load().publicKey;
+
+export const subscriptionCount = () => load().subs.length;
+
+export function subscribe(sub: Subscription) {
+  const store = load();
+  store.subs = [sub, ...store.subs.filter((s) => s.endpoint !== sub.endpoint)].slice(0, MAX_SUBS);
+  write();
+}
+
+export function unsubscribe(endpoint: string) {
+  const store = load();
+  const before = store.subs.length;
+  store.subs = store.subs.filter((s) => s.endpoint !== endpoint);
+  if (store.subs.length !== before) write();
+}
+
+export type PushMessage = { title: string; body: string; tag: string; url: string; kind: "done" | "needs" | "failed" | "test" };
+
+/** Sends to every subscribed browser; ones the push service says are gone are dropped. */
+export async function pushAll(msg: PushMessage, only?: string) {
+  const store = load();
+  const targets = only ? store.subs.filter((s) => s.endpoint === only) : store.subs;
+  const gone: string[] = [];
+  let sent = 0;
+  await Promise.all(
+    targets.map(async (s) => {
+      try {
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: s.keys }, JSON.stringify(msg), {
+          /* Apple refuses a VAPID subject it can't read as a contact; the site's own https origin is one */
+          vapidDetails: { subject: s.origin.startsWith("https://") ? s.origin : "mailto:agent-u@example.com", publicKey: store.publicKey, privateKey: store.privateKey },
+          TTL: 60 * 60,
+          urgency: msg.kind === "done" ? "normal" : "high",
+          topic: msg.tag.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32) || undefined,
+        });
+        sent++;
+      } catch (err) {
+        const code = (err as { statusCode?: number }).statusCode;
+        if (code === 404 || code === 410) gone.push(s.endpoint);
+        else console.warn(`push to ${new URL(s.endpoint).host} failed: ${code ?? (err as Error).message}`);
+      }
+    }),
+  );
+  if (gone.length) {
+    store.subs = store.subs.filter((s) => !gone.includes(s.endpoint));
+    write();
+  }
+  return { sent, dropped: gone.length };
+}
+
+/** test hook */
+export const resetPushCache = () => {
+  cache = null;
+};

@@ -9,6 +9,7 @@ import { terminalBusy } from "@/lib/status";
 import { OPEN_PALETTE_EVENT } from "./CommandPalette";
 import { Pulse } from "./Pulse";
 import { ThemeToggle } from "./ThemeToggle";
+import { NotifyButton } from "./NotifyButton";
 
 /* ─────────────────────────────────────────────────────────
  * SIDEBAR
@@ -691,16 +692,19 @@ export function SessionList({
 
       <div className="flex shrink-0 items-center justify-between gap-2 px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <ThemeToggle />
-        <IconButton
-          label="Sign out"
-          tipPos="bottom-end"
-          onClick={async () => {
-            await api("/api/auth/logout", {}).catch(() => undefined);
-            window.location.href = "/login";
-          }}
-        >
-          <LogOut width={17} height={17} strokeWidth={1.8} aria-hidden />
-        </IconButton>
+        <span className="flex items-center gap-1">
+          <NotifyButton />
+          <IconButton
+            label="Sign out"
+            tipPos="bottom-end"
+            onClick={async () => {
+              await api("/api/auth/logout", {}).catch(() => undefined);
+              window.location.href = "/login";
+            }}
+          >
+            <LogOut width={17} height={17} strokeWidth={1.8} aria-hidden />
+          </IconButton>
+        </span>
       </div>
     </nav>
   );

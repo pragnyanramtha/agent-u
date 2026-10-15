@@ -14,6 +14,8 @@ import { AgentsScreen } from "./AgentsScreen";
 import { FilesScreen, OPEN_FILES_EVENT } from "./FilesScreen";
 import { OfflineBanner } from "./OfflineBanner";
 import { useKeyboardInset } from "@/lib/client/useKeyboardInset";
+import { setAttention, setBaseTitle } from "@/lib/client/attention";
+import { registerWorker, resyncPush } from "@/lib/client/push";
 
 const isEditable = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && !["checkbox", "radio", "button"].includes((t as HTMLInputElement).type)));
@@ -68,9 +70,12 @@ export function App() {
   const sessionId = active && active !== NEW_TAB && !VIEW_TABS[active] ? active : null;
 
   useEffect(() => {
-    if (active === NEW_TAB) document.title = "New session · agent-u";
-    else if (active && VIEW_TABS[active]) document.title = `${VIEW_TABS[active]} · agent-u`;
+    if (active === NEW_TAB) setBaseTitle("New session · agent-u");
+    else if (active && VIEW_TABS[active]) setBaseTitle(`${VIEW_TABS[active]} · agent-u`);
   }, [active]);
+  useEffect(() => {
+    if (sessions) setAttention(sessions.filter((s) => s.web?.pending.length).length);
+  }, [sessions]);
 
   /* "Browse files here" from a session: the Files tab, at that folder */
   const [filesStart, setFilesStart] = useState<{ path: string | null; n: number }>({ path: null, n: 0 });
@@ -93,6 +98,21 @@ export function App() {
     },
     [open, refresh],
   );
+  /* the service worker: a tapped notification opens its session, a push means the list just changed */
+  useEffect(() => {
+    registerWorker();
+    void resyncPush().catch(() => undefined);
+    if (!("serviceWorker" in navigator)) return;
+    const on = (e: MessageEvent) => {
+      const d = e.data as { type?: string; url?: string } | null;
+      if (d?.type === "push") void refresh();
+      if (d?.type !== "open" || !d.url) return;
+      const id = new URL(d.url, location.href).searchParams.get("s");
+      if (id) openSession(id);
+    };
+    navigator.serviceWorker.addEventListener("message", on);
+    return () => navigator.serviceWorker.removeEventListener("message", on);
+  }, [openSession, refresh]);
   const newTab = useCallback(() => {
     openNewTab();
     setDrawer(false);

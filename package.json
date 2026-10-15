@@ -27,6 +27,7 @@
     "shadow-plugin": "2.1.0",
     "streamdown": "2.7.0",
     "tailwind-merge": "3.6.0",
+    "web-push": "3.6.7",
     "ws": "8.22.0"
   },
   "devDependencies": {
@@ -34,6 +35,7 @@
     "@types/node": "22.20.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
+    "@types/web-push": "3.6.4",
     "@types/ws": "8.18.2",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",

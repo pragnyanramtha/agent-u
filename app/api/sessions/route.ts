@@ -1,11 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
-import { getRun, startRun } from "@/lib/server/runner";
-import { listSessions } from "@/lib/server/sessions";
+import { startRun } from "@/lib/server/runner";
+import { sessionRows } from "@/lib/server/rows";
 import { parseMode, readJson, str } from "@/lib/server/http";
 import type { AgentId } from "@/lib/types";
-import { agentSummaries } from "@/lib/server/agents/bridge";
 import { agentStart } from "@/lib/server/agents/routes";
 import { once } from "@/lib/server/dedupe";
 import { guardTurn } from "@/lib/server/fallback";
@@ -14,14 +13,7 @@ import { pickProfile, setSessionProfile } from "@/lib/server/profiles";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const [sessions, others] = await Promise.all([listSessions(), agentSummaries().catch(() => [])]);
-  const rows = [
-    ...sessions.map((s) => {
-      const run = getRun(s.id);
-      return run ? { ...s, terminal: null, web: run.state } : { ...s, web: null };
-    }),
-    ...others,
-  ].sort((a, b) => b.mtime - a.mtime);
+  const rows = await sessionRows();
   const projects = [...new Set(rows.map((s) => s.cwd).filter(Boolean))].slice(0, 30);
   return NextResponse.json({ sessions: rows, projects });
 }

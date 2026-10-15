@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { sameOrigin, signedIn } from "@/lib/guard";
 
-const PUBLIC = ["/login", "/api/auth/login", "/manifest.webmanifest", "/icon.svg", "/apple-touch-icon.png"];
+const PUBLIC = ["/login", "/api/auth/login", "/manifest.webmanifest", "/icon.svg", "/apple-touch-icon.png", "/sw.js"];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
