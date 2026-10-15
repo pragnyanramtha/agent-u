@@ -5,11 +5,13 @@ After=network-online.target
 [Service]
 WorkingDirectory=%h/agent-u
 Environment=NODE_ENV=production
+# the app ends agent turns itself on SIGTERM (lib/server/shutdown.ts)
+Environment=NEXT_MANUAL_SIG_HANDLE=1
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/node %h/agent-u/node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3311
 Restart=on-failure
 RestartSec=3
-TimeoutStopSec=5
+TimeoutStopSec=35
 KillMode=mixed
 
 [Install]

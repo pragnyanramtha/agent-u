@@ -17,6 +17,10 @@ git archive HEAD | "${SSH[@]}" "mkdir -p \"\$HOME/$DIR\" && cd \"\$HOME/$DIR\" &
   pnpm install --frozen-lockfile >/dev/null || { echo 'pnpm install failed; nothing restarted' >&2; exit 1; }
   pnpm build > .deploy-build.log 2>&1 || { tail -40 .deploy-build.log >&2; echo 'Build failed; the running app was left as is' >&2; exit 1; }
   grep -E 'Compiled' .deploy-build.log
+  for u in agent-u agent-u-pty; do
+    dst=\$HOME/.config/systemd/user/\$u.service
+    if [ -f \"\$dst\" ] && ! cmp -s deploy/\$u.service \"\$dst\"; then cp \"\$dst\" \"\$dst.bak\" && cp deploy/\$u.service \"\$dst\" && echo \"updated \$u.service (old one in \$u.service.bak)\" && systemctl --user daemon-reload; fi
+  done
   units=agent-u
   pty=\$(cat server/* package.json 2>/dev/null | sha256sum | cut -d' ' -f1)
   if [ \"\$pty\" != \"\$(cat .pty-hash 2>/dev/null)\" ] || ! systemctl --user is-active --quiet agent-u-pty; then units=\"agent-u agent-u-pty\"; fi

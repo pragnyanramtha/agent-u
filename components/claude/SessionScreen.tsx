@@ -79,9 +79,11 @@ export function SessionScreen({
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   const run = view.run && view.run.status !== "closed" ? view.run : null;
+  /* a failed run stays on screen (its error, its last state) but can't take mode/model/stop changes; the next send starts fresh */
+  const live = run && run.status !== "error" ? run : null;
   const terminal = view.terminal;
   const busy = run ? run.status === "running" || run.status === "starting" : terminalBusy(terminal?.status);
-  const mode = run?.permissionMode ?? localMode ?? view.permissionMode ?? "default";
+  const mode = live?.permissionMode ?? localMode ?? run?.permissionMode ?? view.permissionMode ?? "default";
   const model = localModel ?? run?.model ?? null;
   const where = terminal ? terminal.multiplexer ?? "a terminal" : null;
   const agent: AgentId = id.includes(":") ? (id.slice(0, id.indexOf(":")) as AgentId) : "claude";
@@ -137,18 +139,23 @@ export function SessionScreen({
 
   /* the bubble stays until the message shows up in the transcript; failures stay visible with Retry */
   const deliver = useCallback(
-    async (localId: string, text: string) => {
-      updatePending(localId, { state: "sending", error: undefined, at: Date.now() });
+    async (localId: string, text: string, fresh = false) => {
+      updatePending(localId, { state: "sending", error: undefined, resend: undefined, at: Date.now() });
       try {
         const res = await postReliably<{ id: string; via?: "terminal" | "web" | "queued"; cleared?: string | null }>(
           `/api/sessions/${id}/message`,
           { text, model: localModel ?? undefined, permissionMode: localMode ?? undefined, profile: localProfile ?? undefined },
-          localId,
+          fresh ? `${localId}-${Date.now().toString(36)}` : localId,
         );
         updatePending(localId, { state: "sent", via: res.via, at: Date.now() });
         /* a greyed suggestion or half-typed text was in the terminal's prompt; say what was cleared */
         if (res.cleared && !/^Try "/.test(res.cleared)) setError(`Cleared "${res.cleared.slice(0, 80)}" from the terminal's prompt before sending.`);
-        if (res.id !== id) onNavigate(res.id);
+        if (res.id !== id) {
+          /* carry unsent bubbles over to the new id */
+          const saved = sessionStorage.getItem(`pending:${id}`);
+          if (saved) sessionStorage.setItem(`pending:${res.id}`, saved);
+          onNavigate(res.id);
+        }
       } catch (err) {
         updatePending(localId, { state: "failed", error: err instanceof ApiError && err.status < 500 ? err.message : OFFLINE });
         /* the terminal refused the keystrokes: show it, so the reason is visible */
@@ -484,7 +491,7 @@ export function SessionScreen({
             agentName={agentName}
             claudeBusy={Boolean(busy)}
             queued={p.via === "queued" && view.queue.includes(p.localId)}
-            onRetry={() => void deliver(p.localId, p.text)}
+            onRetry={() => void deliver(p.localId, p.text, p.resend)}
             onDiscard={() => dropPending(p.localId)}
             onUnqueue={() => {
               dropPending(p.localId);
@@ -523,14 +530,17 @@ export function SessionScreen({
               placeholder={terminal && !run ? `Type into ${where}…` : `Reply to ${agentName}…`}
               onSend={send}
               running={Boolean(busy && (run || terminal))}
-              onStop={() => (run ? void control("interrupt") : void pressKey("Escape"))}
+              onStop={() => (live ? void control("interrupt") : void pressKey("Escape"))}
               slashCommands={run?.slashCommands ?? []}
               mode={mode}
-              onModeChange={(m) => (run ? void control("mode", m) : setLocalMode(m))}
+              onModeChange={(m) => {
+                setLocalMode(m);
+                if (live) void control("mode", m);
+              }}
               model={model}
               onModelChange={(m) => {
                 setLocalModel(m || null);
-                if (run) void control("model", m);
+                if (live) void control("model", m);
               }}
               autoFocus
               cwd={agent === "claude" ? view.cwd || undefined : undefined}
@@ -548,21 +558,24 @@ export function SessionScreen({
               onAppCommand={(name, arg) => {
                 const a = arg.toLowerCase();
                 if (name === "model") {
-                  const m = MODELS.find((x) => x.key === a || x.name.toLowerCase().startsWith(a))?.key ?? (a === "default" ? "" : null);
-                  if (m === null) return setError("Use /model opus, sonnet, haiku, or default."), true;
+                  const m =
+                    agent === "claude"
+                      ? (MODELS.find((x) => x.key === a || x.name.toLowerCase().startsWith(a))?.key ?? (a === "default" ? "" : null))
+                      : a === "default" ? "" : arg.trim() || null;
+                  if (m === null) return setError(agent === "claude" ? "Use /model opus, sonnet, haiku, or default." : "Use /model <model id>, or /model default."), true;
                   setLocalModel(m || null);
-                  if (run) void control("model", m);
+                  if (live) void control("model", m);
                 } else if (name === "mode") {
                   const m = MODE_ALIASES[a.replace(/\s+/g, "")];
                   if (!m) return setError("Use /mode ask, edits, plan, or bypass."), true;
-                  if (run) void control("mode", m);
-                  else setLocalMode(m);
+                  setLocalMode(m);
+                  if (live) void control("mode", m);
                 } else if (name === "stop") {
-                  if (run) void control("interrupt");
+                  if (live) void control("interrupt");
                   else if (terminal) void pressKey("Escape");
                 } else if (name === "new") onNew();
                 else if (name === "end") {
-                  if (run) void control("stop");
+                  if (live) void control("stop");
                 } else return false;
                 return true;
               }}

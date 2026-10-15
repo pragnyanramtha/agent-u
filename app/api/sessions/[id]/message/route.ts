@@ -67,7 +67,7 @@ async function claudeMessage(id: string, body: Record<string, unknown>) {
       ({ queued, cleared } = await typeIntoTerminal(target, text));
     } catch (err) {
       if (err instanceof InputRefused) return NextResponse.json({ error: err.message, code: err.code }, { status: 409 });
-      return NextResponse.json({ error: `Couldn't type into the terminal: ${err instanceof Error ? err.message.slice(0, 160) : err}` }, { status: 502 });
+      return NextResponse.json({ error: `Couldn't type into the terminal: ${err instanceof Error ? err.message.slice(0, 160) : err}`, code: "terminal_error" }, { status: 500 });
     }
     return NextResponse.json({ id, via: "terminal", queued, cleared });
   }

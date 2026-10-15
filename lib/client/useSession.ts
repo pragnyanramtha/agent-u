@@ -13,10 +13,14 @@ export type Pending = {
   state: "sending" | "sent" | "failed";
   via?: "terminal" | "web" | "queued";
   error?: string;
+  /** the server took it (so its client id is spent) but it never ran: a retry must go out as a new send */
+  resend?: boolean;
 };
 
 /* the terminal path flattens newlines, and Claude Code trims; compare on collapsed whitespace */
-const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+const norm = (s: string) => s.replace(/\s+/g, " ").trim().replace(/^!\s+/, "!");
+/** a user entry can only be the bubble's message if it landed after the bubble was made (clock skew allowed) */
+const landedAfter = (e: Entry, p: Pending) => !e.ts || Date.parse(e.ts) >= p.at - 60_000;
 const pendingKey = (id: string) => `pending:${id}`;
 
 /** waits `ms`, or less when the network comes back or the tab is shown again */
@@ -97,7 +101,7 @@ export type SessionView = {
 };
 
 type Action =
-  | { type: "event"; event: ServerEvent }
+  | { type: "event"; event: ServerEvent; initial?: boolean }
   | { type: "older"; entries: Entry[]; cursor: number | null }
   | { type: "loadingOlder" }
   | { type: "olderFailed" }
@@ -164,8 +168,8 @@ function merge(state: SessionView, batch: Entry[], where: "append" | "prepend"):
         if (trimmed.size) streams = streams.map((s) => (trimmed.has(s) ? { ...s, text: trimmed.get(s)! } : s));
       }
     }
-    if (e.kind === "user" && pending.length) {
-      const i = pending.findIndex((p) => norm(p.text) === norm(e.text));
+    if (e.kind === "user" && pending.length && where === "append") {
+      const i = pending.findIndex((p) => norm(p.text) === norm(e.text) && landedAfter(e, p));
       if (i !== -1) pending = pending.filter((_, j) => j !== i);
     }
   }
@@ -186,7 +190,8 @@ function reducer(state: SessionView, action: Action): SessionView {
     case "event": {
       const e = action.event;
       if (e.type === "history") {
-        const first = state.status === "connecting";
+        /* the first load (by GET) replaces everything; later history events (stream reconnects) only add */
+        const first = action.initial === true;
         const merged = merge(first ? { ...state, entries: [], ids: new Set(), results: {}, dropped: new Set() } : state, e.entries, "append");
         return {
           ...merged,
@@ -208,7 +213,12 @@ function reducer(state: SessionView, action: Action): SessionView {
       if (e.type === "queue") return { ...state, queue: e.items.map((q) => q.id) };
       if (e.type === "run") {
         const ended = !e.run || e.run.status === "idle" || e.run.status === "closed" || e.run.status === "error";
-        return { ...state, run: e.run, streams: ended ? [] : state.streams };
+        /* a run that failed won't read what it was handed: those bubbles get Retry (same client id, so no double send) */
+        const failed = e.run?.status === "error";
+        const pending = failed
+          ? state.pending.map((p) => (p.state === "sent" && p.via === "web" ? { ...p, state: "failed" as const, resend: true, error: e.run?.error ?? "The run stopped before it read this." } : p))
+          : state.pending;
+        return { ...state, run: e.run, streams: ended ? [] : state.streams, pending };
       }
       if (e.type === "delta") {
         const d = e.delta;
@@ -247,8 +257,8 @@ function reducer(state: SessionView, action: Action): SessionView {
       return { ...state, pending: state.pending.map((p) => (p.localId === action.localId ? { ...p, ...action.patch } : p)) };
     case "restorePending": {
       const have = new Set(state.pending.map((p) => p.localId));
-      const seen = new Set(state.entries.flatMap((e) => (e.kind === "user" ? [norm(e.text)] : [])));
-      return { ...state, pending: [...state.pending, ...action.pending.filter((p) => !have.has(p.localId) && !seen.has(norm(p.text)))] };
+      const landed = (p: Pending) => state.entries.some((e) => e.kind === "user" && norm(e.text) === norm(p.text) && landedAfter(e, p));
+      return { ...state, pending: [...state.pending, ...action.pending.filter((p) => !have.has(p.localId) && !landed(p))] };
     }
     case "dropPending":
       return { ...state, pending: state.pending.filter((p) => p.localId !== action.localId) };
@@ -273,7 +283,7 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
         try {
           const first = await api<Extract<ServerEvent, { type: "history" }> & { end: string | number; agent?: AgentId }>(`/api/sessions/${id}`);
           if (abort.signal.aborted) return;
-          dispatch({ type: "event", event: first });
+          dispatch({ type: "event", event: first, initial: true });
           from = first.end;
           break;
         } catch (err) {
@@ -374,7 +384,7 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
     restored.current = true;
     try {
       const saved = JSON.parse(sessionStorage.getItem(pendingKey(id)) ?? "[]") as Pending[];
-      if (saved.length) dispatch({ type: "restorePending", pending: saved.map((p) => (p.state === "sending" ? { ...p, state: "sent" } : p)) });
+      if (saved.length) dispatch({ type: "restorePending", pending: saved.map((p) => (p.state === "sending" ? { ...p, state: "failed", error: "The page reloaded before this was confirmed. Retry is safe: it won't send twice." } : p)) });
     } catch {
       /* corrupt entry: ignore */
     }

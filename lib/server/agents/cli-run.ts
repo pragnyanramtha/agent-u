@@ -124,6 +124,8 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
 const lastLine = (s: string) => s.trim().split("\n").filter(Boolean).slice(-1)[0]?.slice(0, 300) ?? "";
 
 export const turnState = (key: string) => runs.get(key)?.state ?? null;
+/** keys of turns still running */
+export const runningTurns = () => [...runs].filter(([, r]) => r.state.status === "running").map(([k]) => k);
 
 /** Re-key a run (a new session whose id is only known after the CLI starts). Live deltas follow the run. */
 export function rekeyTurn(from: string, to: string) {

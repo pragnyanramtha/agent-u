@@ -106,12 +106,28 @@ export class InputRefused extends Error {
   }
 }
 
+/* one writer per pane: two sends interleaving would clear each other's half-typed text */
+const paneLocks = new Map<string, Promise<unknown>>();
+function withPane<T>(target: InputTarget, fn: () => Promise<T>): Promise<T> {
+  const key = target.kind === "zellij" ? `zellij:${target.session}:${target.pane}` : `tmux:${target.pane}`;
+  const prev = paneLocks.get(key) ?? Promise.resolve();
+  const next = prev.catch(() => undefined).then(fn);
+  const tail = next.catch(() => undefined);
+  paneLocks.set(key, tail);
+  void tail.then(() => paneLocks.get(key) === tail && paneLocks.delete(key));
+  return next;
+}
+
 /**
  * Types the text and presses Return, after checking the prompt is focused and
  * empty. Reports whether it looks queued (Claude busy) rather than taken.
  * Newlines become spaces: a real Enter submits in Claude's prompt.
  */
-export async function typeIntoTerminal(target: InputTarget, text: string, { checkPrompt = true } = {}) {
+export function typeIntoTerminal(target: InputTarget, text: string, opts: { checkPrompt?: boolean } = {}) {
+  return withPane(target, () => typeLocked(target, text, opts));
+}
+
+async function typeLocked(target: InputTarget, text: string, { checkPrompt = true } = {}) {
   if (!checkPrompt) {
     await keys(target, text.replace(/[\r\n]+/g, " "));
     return { queued: false, cleared: null as string | null };
@@ -140,10 +156,13 @@ export async function typeIntoTerminal(target: InputTarget, text: string, { chec
     throw new InputRefused("The terminal isn't showing Claude's prompt right now (a dialog or menu may be open). Check the terminal view.", before.code);
   }
   await keys(target, text.replace(/[\r\n]+/g, " "));
-  /* a busy Claude keeps a submitted message in its prompt area as queued, so text still showing isn't a failure */
+  /* a busy Claude keeps a submitted message in its prompt area as queued, so text still showing isn't a failure;
+   * the keys are sent by now, so a failing check must not turn into an error (a retry would type it twice) */
   for (let i = 0; i < 4; i++) {
     await sleep(250);
-    const after = readPrompt(await paneScreen(target, true));
+    const screen = await paneScreen(target, true).catch(() => null);
+    if (screen === null) return { queued: false, cleared };
+    const after = readPrompt(screen);
     if (after.ok || after.code !== "has_text") return { queued: false, cleared };
     /* with a suggestion showing, its text can linger after submit; that's not our message being stuck */
     if (ghost) return { queued: false, cleared };
@@ -166,8 +185,10 @@ const KEYS = {
 export type TerminalKey = keyof typeof KEYS;
 export const isTerminalKey = (k: unknown): k is TerminalKey => typeof k === "string" && k in KEYS;
 
-export async function pressKey(target: InputTarget, key: TerminalKey) {
+export function pressKey(target: InputTarget, key: TerminalKey) {
   const k = KEYS[key];
-  if (target.kind === "zellij") await run("zellij", ["--session", target.session, "action", "write", "-p", target.pane, ...k.zellij]);
-  else await run("tmux", ["send-keys", "-t", target.pane, k.tmux]);
+  return withPane(target, async () => {
+    if (target.kind === "zellij") await run("zellij", ["--session", target.session, "action", "write", "-p", target.pane, ...k.zellij]);
+    else await run("tmux", ["send-keys", "-t", target.pane, k.tmux]);
+  });
 }

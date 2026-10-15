@@ -14,11 +14,13 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
   });
 
-const backOnline = (signal?: AbortSignal) =>
+/* navigator.onLine can be wrong (some VPNs), so waiting for "online" is capped and the request is tried anyway */
+const backOnline = (signal?: AbortSignal, maxMs = 15_000) =>
   navigator.onLine
     ? Promise.resolve()
     : new Promise<void>((resolve) => {
-        const done = () => (window.removeEventListener("online", done), resolve());
+        const t = setTimeout(() => done(), maxMs);
+        const done = () => (clearTimeout(t), window.removeEventListener("online", done), resolve());
         window.addEventListener("online", done);
         signal?.addEventListener("abort", done, { once: true });
       });
