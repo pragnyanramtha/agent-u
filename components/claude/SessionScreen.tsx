@@ -131,9 +131,16 @@ export function SessionScreen({
     return () => clearTimeout(t);
   }, [error]);
 
-  useEffect(() => {
-    if (run?.error) setError(run.error);
-  }, [run?.error]);
+  /* a failed run stays on screen (with Retry and Continue in) until dismissed or the next turn starts */
+  const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const failed = run?.status === "error" && run.error && run.error !== dismissedError ? run.error : null;
+  const lastUserText = useMemo(() => {
+    for (let i = view.entries.length - 1; i >= 0; i--) {
+      const e = view.entries[i];
+      if (e.kind === "user") return e.text;
+    }
+    return null;
+  }, [view.entries]);
 
   useEffect(() => {
     document.title = view.title ? `${view.title} · agent-u` : "agent-u";
@@ -217,14 +224,16 @@ export function SessionScreen({
     [id],
   );
 
-  /* status as a quiet mark + word; below 480px only the mark shows (the word stays for screen readers) */
+  /* status as a quiet mark + word; below 480px only the mark shows for calm states, states that need you keep the word */
   const chip = "flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-[13px]";
   const chipLabel = "max-w-[9rem] truncate max-[479px]:sr-only";
-  const runLabel = run ? (run.pending.length ? "Needs you" : busy ? "Working…" : "Ready") : "";
+  const loudLabel = "max-w-[9rem] truncate";
+  const runFailed = run?.status === "error";
+  const runLabel = run ? (run.pending.length ? "Needs you" : busy ? "Working…" : runFailed ? "Failed" : "Ready") : "";
   const status = view.status === "reconnecting" ? (
     <span role="status" className={`${chip} text-orange-ink`} title="Reconnecting…">
       <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-current" aria-hidden />
-      <span className={chipLabel}>Reconnecting…</span>
+      <span className={loudLabel}>Reconnecting…</span>
     </span>
   ) : terminal ? (
     <span className={`${chip} text-ink-3`} title={`Open in ${where}`}>
@@ -235,9 +244,15 @@ export function SessionScreen({
       </span>
     </span>
   ) : run ? (
-    <span role="status" className={`${chip} ${run.pending.length ? "font-medium text-orange-ink" : "text-ink-3"}`} title={runLabel}>
-      {run.pending.length ? <span className="size-1.5 shrink-0 rounded-full bg-orange" aria-hidden /> : <Pulse busy={busy} size={2.5} cellClass={AGENT_TONE[agent]} />}
-      <span className={chipLabel}>{runLabel}</span>
+    <span role="status" className={`${chip} ${run.pending.length ? "font-medium text-orange-ink" : runFailed && !busy ? "font-medium text-red-ink" : "text-ink-3"}`} title={run.error && runFailed ? run.error : runLabel}>
+      {run.pending.length ? (
+        <span className="size-1.5 shrink-0 rounded-full bg-orange" aria-hidden />
+      ) : runFailed && !busy ? (
+        <span className="size-1.5 shrink-0 rounded-full bg-red" aria-hidden />
+      ) : (
+        <Pulse busy={busy} size={2.5} cellClass={AGENT_TONE[agent]} />
+      )}
+      <span className={run.pending.length || (runFailed && !busy) ? loudLabel : chipLabel}>{runLabel}</span>
     </span>
   ) : null;
 
@@ -294,7 +309,7 @@ export function SessionScreen({
           </button>
           <div className="flex min-w-0 flex-1 flex-col px-1.5 sm:flex-row sm:items-baseline sm:gap-2.5">
             <h1 className="min-w-0 truncate text-[15px] font-medium tracking-[-0.01em] text-ink sm:text-[14.5px]" title={view.title || undefined}>
-              {view.title || (view.status === "missing" ? "Couldn’t load this session" : "Loading session…")}
+              {view.title || (view.status === "missing" ? "Couldn't load this session" : "Loading session…")}
             </h1>
             {(view.cwd || runsOn) && (
               <p className="flex min-w-0 shrink-[3] items-center gap-1.5 text-[12px] text-ink-3 sm:text-[13px]" title={view.cwd || undefined}>
@@ -493,6 +508,7 @@ export function SessionScreen({
       <Thread
         view={view}
         busy={Boolean(busy)}
+        agentName={agentName}
         workingLabel={terminal && !run ? `Working in ${where}` : agent === "claude" ? "Thinking" : `${agentName} is working`}
         onLoadOlder={() => void loadOlder()}
         pendingSlot={(p) => (
@@ -531,6 +547,26 @@ export function SessionScreen({
         <div className="h-6 bg-gradient-to-t from-page to-transparent" />
         <div className="pointer-events-auto bg-page px-3 pb-3 sm:px-8 sm:pb-5">
           <div className="mx-auto max-w-[740px]">
+            {failed && !busy && (
+              <div role="alert" className="mb-2 flex flex-col gap-2 rounded-[12px] border border-red/25 bg-red-tint px-3 py-2.5 text-[13px] text-red-ink sm:flex-row sm:items-center" style={{ animation: "fade-up 240ms cubic-bezier(0.23,1,0.32,1) both" }}>
+                <p className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                  <span className="font-medium">{agentName} stopped with an error.</span> {failed}
+                </p>
+                <div className="flex shrink-0 items-center gap-1">
+                  {lastUserText && !view.pending.some((p) => p.state === "failed") && (
+                    <button type="button" onClick={() => void send(lastUserText)} className="tap relative h-8 rounded-full px-3 text-[12.5px] font-medium text-ink hover:bg-hover">
+                      Retry last message
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setHandoffOpen(true)} className="tap relative h-8 rounded-full px-3 text-[12.5px] font-medium text-ink hover:bg-hover">
+                    Continue in…
+                  </button>
+                  <button type="button" onClick={() => setDismissedError(failed)} aria-label="Dismiss" className="tap relative grid size-8 place-items-center rounded-full text-ink-2 hover:bg-hover">
+                    <Xmark width={15} height={15} strokeWidth={1.8} />
+                  </button>
+                </div>
+              </div>
+            )}
             {error && (
               <p role="alert" className="mb-2 rounded-[10px] bg-red-tint px-3 py-2 text-[13px] text-red-ink" style={{ animation: "fade-up 240ms cubic-bezier(0.23,1,0.32,1) both" }}>
                 {error}

@@ -255,6 +255,7 @@ export function Thread({
   view,
   busy,
   workingLabel,
+  agentName = "Claude",
   onLoadOlder,
   bottomPad,
   footer,
@@ -266,6 +267,7 @@ export function Thread({
   view: SessionView;
   busy: boolean;
   workingLabel: string;
+  agentName?: string;
   onLoadOlder: () => void;
   bottomPad: number;
   footer?: ReactNode;
@@ -425,7 +427,7 @@ export function Thread({
       {!atBottom && (
         <button
           type="button"
-          aria-label={footer ? "Claude needs you: jump to the request" : "Jump to latest"}
+          aria-label={footer ? `${agentName} needs you: jump to the request` : "Jump to latest"}
           onClick={() => {
             stickRef.current = true;
             scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -435,7 +437,7 @@ export function Thread({
           }`}
           style={{ bottom: bottomPad + 12, animation: "pop-in 180ms cubic-bezier(0.23,1,0.32,1) both" }}
         >
-          {footer && <span>Claude needs you</span>}
+          {footer && <span>{agentName} needs you</span>}
           <ArrowDown width={16} height={16} strokeWidth={2} />
         </button>
       )}

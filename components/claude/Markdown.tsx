@@ -9,6 +9,23 @@ import { CodeCard, copyText } from "./CodeCard";
  * It brings ~100 kB (marked, remend, unified, sanitize, and a rehype-raw we don't use
  * but can't tree-shake). Fetching starts as soon as the app bundle runs, in parallel
  * with the first session fetch, so it is normally ready before any message renders. */
+/* An image in agent output is a request to whatever host the text names, and the URL can carry anything the
+ * agent read; it loads only when asked. */
+function RemoteImage({ src, alt }: { src: string; alt: string }) {
+  const [shown, setShown] = useState(false);
+  let host = "";
+  try {
+    host = new URL(src, location.href).host;
+  } catch {}
+  if (shown) return <img src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy="no-referrer" className="md-img" />;
+  return (
+    <button type="button" onClick={() => setShown(true)} title={src} className="my-1 inline-flex max-w-full items-center gap-1.5 rounded-[8px] border border-line px-2.5 py-1.5 text-left text-[12.5px] text-ink-2 hover:bg-hover">
+      <span className="truncate">{alt ? `Image: ${alt}` : "Image"}</span>
+      {host && <span className="shrink-0 text-ink-3">from {host}. Load</span>}
+    </button>
+  );
+}
+
 type SD = typeof import("streamdown");
 let sd: SD | null = null;
 let sdLoad: Promise<SD> | null = null;
@@ -35,13 +52,13 @@ function rehypeNumericColumns() {
     if (node.type === "element" && node.tagName === "table") {
       const rows = elements(node, "tr").map((tr) => (tr.children ?? []).filter((c) => c.type === "element" && (c.tagName === "td" || c.tagName === "th")));
       const body = rows.filter((r) => r.some((c) => c.tagName === "td"));
-      const width = Math.max(0, ...rows.map((r) => r.length));
+      const width = rows.reduce((m, r) => Math.max(m, r.length), 0);
       for (let col = 0; col < width; col++) {
         const texts = rows.map((r) => (r[col] ? textOf(r[col]).trim() : ""));
         const vals = body.map((r) => (r[col] ? textOf(r[col]).trim() : "")).filter((v) => !BLANK.test(v));
         const numeric = vals.length > 0 && vals.every((v) => NUMERIC.test(v));
         /* short columns (ids, names, dates) stay on one line; prose columns take the wrapping */
-        const short = Math.max(0, ...texts.map((t) => t.length)) <= SHORT_CELL;
+        const short = texts.reduce((m, t) => Math.max(m, t.length), 0) <= SHORT_CELL;
         for (const r of rows) {
           const p = r[col]?.properties;
           if (!p) continue;
@@ -203,7 +220,7 @@ const components: Components = {
         {children}
       </span>
     ),
-  img: ({ src, alt }) => (typeof src === "string" && src ? <img src={src} alt={alt ?? ""} loading="lazy" decoding="async" className="md-img" /> : null),
+  img: ({ src, alt }) => (typeof src === "string" && src ? <RemoteImage src={src} alt={alt ?? ""} /> : null),
 };
 
 /* our `a` decides what's a link; Streamdown's confirm-before-open modal stays off */

@@ -72,7 +72,7 @@ function QuestionCard({ ask, respond }: { ask: Extract<PendingAsk, { kind: "ques
       resettable={false}
       labels={{ skip: "Skip", send: "Send answers", sentMessage: "Answers sent" }}
       questions={ask.questions.map((q) => ({ q: q.question, type: q.multiSelect ? "check" : "radio", options: q.options.map((o) => o.label) }))}
-      onDismiss={() => void respond({ requestId: ask.requestId, allow: false })}
+      onDismiss={() => void respond({ requestId: ask.requestId, allow: false }).catch(() => {})}
       onSubmitted={(picked, custom) => {
         const answers = Object.fromEntries(
           ask.questions.map((q, i) => {
@@ -81,7 +81,7 @@ function QuestionCard({ ask, respond }: { ask: Extract<PendingAsk, { kind: "ques
             return [q.question, chosen.join(", ")];
           }),
         );
-        void respond({ requestId: ask.requestId, allow: true, answers });
+        void respond({ requestId: ask.requestId, allow: true, answers }).catch(() => {});
       }}
     />
   );

@@ -37,7 +37,8 @@
   --ink: oklch(0.247 0.006 258.361);
   --ink-2: oklch(0.506 0.01 264.477);
   /* ink-3 sits near 4:1 on page/surface so tertiary text stays legible */
-  --ink-3: oklch(0.58 0.009 264.505);
+  /* 4.5:1 on the page for the small meta text it carries */
+  --ink-3: oklch(0.54 0.009 264.505);
 
   /* borders: solid and crisp, not alpha */
   --line: oklch(0.946 0.003 264.542);
@@ -888,7 +889,7 @@ label {
   }
   @media (pointer: coarse) {
     .side-row {
-      height: 40px;
+      height: 44px;
     }
   }
 
@@ -923,8 +924,8 @@ label {
   }
   @media (pointer: coarse) {
     .icon-btn {
-      width: 40px;
-      height: 40px;
+      width: 44px;
+      height: 44px;
     }
   }
 
@@ -952,7 +953,7 @@ label {
   }
   @media (pointer: coarse) {
     .menu-item {
-      min-height: 40px;
+      min-height: 44px;
     }
   }
 }

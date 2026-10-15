@@ -330,6 +330,7 @@ export function Composer({
   };
 
   const canSend = draft.trim().length > 0 && !sending;
+  const stopFirst = Boolean(running && onStop && !draft.trim() && !sending);
   const send = async () => {
     if (!canSend) return;
     const text = draft.trim();
@@ -725,7 +726,7 @@ export function Composer({
           aria-controls={slashOpen ? `${uid}-slash` : undefined}
           aria-activedescendant={slashOpen && commands.length ? `${uid}-cmd-${active}` : undefined}
           aria-autocomplete="list"
-          enterKeyHint="send"
+          enterKeyHint="enter"
           className={`composer-input w-full min-w-0 resize-none bg-transparent px-2 py-1.5 text-[16px] leading-6 text-ink outline-none [grid-area:primary] [overflow-wrap:anywhere] sm:text-[15px] sm:pointer-coarse:text-[16px] ${
             busy ? "placeholder:text-ink-2 composer-busy" : "placeholder:text-ink-3"
           }`}
@@ -758,21 +759,30 @@ export function Composer({
             <NavArrowDown width={12} height={12} strokeWidth={2.2} className={`shrink-0 text-ink-3 transition-transform duration-200 ${openMenu === "pick" ? "rotate-180" : ""}`} aria-hidden />
           </button>
           <ContextRing usage={usage} costUsd={costUsd} cost={cost} />
+          {/* with nothing to send, Stop takes Send's place; next to Send it keeps its distance so a near miss doesn't interrupt */}
           {running && onStop && (
-            <button type="button" onClick={onStop} aria-label="Stop" title="Stop" className={`${ghost} size-9 shadow-btn active:scale-[0.94]`}>
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="Stop"
+              title="Stop"
+              className={stopFirst ? "tap relative flex size-9 shrink-0 items-center justify-center rounded-full bg-ink text-surface active:scale-[0.92]" : `${ghost} mr-2 size-9 shadow-btn active:scale-[0.94]`}
+            >
               <span className="size-2.5 rounded-[2px] bg-current" />
             </button>
           )}
-          <button
-            type="button"
-            aria-label={sending ? "Sending…" : "Send (Ctrl+Enter)"}
-            title="Send (Ctrl+Enter)"
-            disabled={!canSend}
-            onClick={() => void send()}
-            className="composer-send tap relative flex size-9 shrink-0 items-center justify-center rounded-full bg-ink text-surface transition-[opacity,transform] duration-200 enabled:active:scale-[0.92] disabled:opacity-25"
-          >
-            {sending ? <span aria-hidden className="composer-spinner size-4 rounded-full border-2 border-current border-r-transparent" /> : <ArrowUp width={18} height={18} strokeWidth={2.2} />}
-          </button>
+          {!stopFirst && (
+            <button
+              type="button"
+              aria-label={sending ? "Sending…" : "Send (Ctrl+Enter)"}
+              title="Send (Ctrl+Enter)"
+              disabled={!canSend}
+              onClick={() => void send()}
+              className="composer-send tap relative flex size-9 shrink-0 items-center justify-center rounded-full bg-ink text-surface transition-[opacity,transform] duration-200 enabled:active:scale-[0.92] disabled:opacity-25"
+            >
+              {sending ? <span aria-hidden className="composer-spinner size-4 rounded-full border-2 border-current border-r-transparent" /> : <ArrowUp width={18} height={18} strokeWidth={2.2} />}
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -360,14 +360,14 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
   /* a plain shell (or one that ended before saying what it was) restarts fresh; attaches retry the same target */
   const isShell = kind === "shell" || (!kind && !target.tmux && !target.pid && !target.session && !target.term);
   const dot = conn === "open" ? "bg-green" : conn === "ended" ? "bg-red" : "animate-pulse bg-orange";
-  const tool = "h-7 shrink-0 rounded-[7px] px-2 text-[12px] text-[#c9ccd3] hover:bg-white/10";
+  const tool = "tap relative h-9 shrink-0 rounded-[7px] px-2 text-[12px] text-[#c9ccd3] hover:bg-white/10 sm:h-7";
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/50 lg:items-center lg:p-6" role="dialog" aria-modal="true" aria-label={`Terminal: ${label}`}>
+    <div className="fixed inset-x-0 top-0 bottom-[var(--kb,0px)] z-50 flex items-stretch justify-center bg-black/50 lg:items-center lg:p-6" role="dialog" aria-modal="true" aria-label={`Terminal: ${label}`}>
       <div
         className="safe-top safe-bottom flex w-full flex-col overflow-hidden bg-[#17181a] shadow-overlay lg:h-[min(90dvh,1000px)] lg:max-w-[1400px] lg:rounded-[14px] lg:border lg:border-line"
         style={{ animation: "pop-in 200ms cubic-bezier(0.23,1,0.32,1) both" }}
       >
-        <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-white/10 px-3 text-[12.5px] text-[#c9ccd3]">
+        <div className="flex h-12 shrink-0 items-center gap-1.5 border-b border-white/10 px-3 text-[12.5px] text-[#c9ccd3] sm:h-11">
           <span className={`size-2 shrink-0 rounded-full ${dot}`} aria-hidden />
           <span className="min-w-0 truncate font-mono text-[12px] text-[#e6e8ec]" title={label}>
             {label}
@@ -398,7 +398,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
             </button>
             <span className="mx-1 hidden text-[11px] text-[#6b7079] lg:inline">Ctrl+Shift+X to close</span>
           </span>
-          <button type="button" onClick={onClose} aria-label="Close terminal" className="tap relative flex size-8 shrink-0 items-center justify-center rounded-[8px] text-[#8b909a] hover:bg-white/10 hover:text-[#e6e8ec]">
+          <button type="button" onClick={onClose} aria-label="Close terminal" className="tap relative flex size-10 shrink-0 items-center justify-center rounded-[8px] text-[#8b909a] hover:bg-white/10 hover:text-[#e6e8ec] sm:size-8">
             <Xmark width={16} height={16} strokeWidth={2} />
           </button>
         </div>
@@ -408,7 +408,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
           {!output && conn !== "ended" && <p className="pointer-events-none absolute inset-x-0 top-1/3 text-center font-mono text-[12px] text-[#6b7079]">{conn === "open" ? "Waiting for the terminal…" : "Connecting…"}</p>}
         </div>
         <div className="no-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 px-2 py-1.5 [mask-image:linear-gradient(to_right,black_88%,transparent)] lg:hidden" role="toolbar" aria-label="Terminal keys">
-          <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => void paste()} className="h-8 shrink-0 rounded-[7px] bg-white/[0.06] px-2.5 font-mono text-[12px] text-[#c9ccd3] active:bg-white/15">
+          <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => void paste()} className="h-10 min-w-10 shrink-0 rounded-[8px] bg-white/[0.06] px-3 font-mono text-[12.5px] text-[#c9ccd3] active:bg-white/15">
             Paste
           </button>
           {KEYS.map(([text, seq]) => (
@@ -418,7 +418,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => press(seq)}
               aria-pressed={seq === mod || undefined}
-              className={`h-8 shrink-0 rounded-[7px] px-2.5 font-mono text-[12px] active:bg-white/15 ${seq === mod ? "bg-white/25 text-white" : "bg-white/[0.06] text-[#c9ccd3]"}`}
+              className={`h-10 min-w-10 shrink-0 rounded-[8px] px-3 font-mono text-[12.5px] active:bg-white/15 ${seq === mod ? "bg-white/25 text-white" : "bg-white/[0.06] text-[#c9ccd3]"}`}
             >
               {text}
             </button>

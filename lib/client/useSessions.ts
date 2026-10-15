@@ -13,12 +13,19 @@ export function useSessions(intervalMs = 5000) {
   const inflight = useRef(false);
   const fails = useRef(0);
   const loaded = useRef(false);
+  const last = useRef("");
 
   const refresh = useCallback(async () => {
     if (inflight.current) return;
     inflight.current = true;
     try {
-      setData(await api<Listing>("/api/sessions"));
+      const next = await api<Listing>("/api/sessions");
+      /* the poll mostly returns what's on screen; same text, same object, no re-render of the list */
+      const text = JSON.stringify(next);
+      if (text !== last.current) {
+        last.current = text;
+        setData(next);
+      }
       setError(null);
       fails.current = 0;
       loaded.current = true;

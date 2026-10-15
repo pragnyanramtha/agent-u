@@ -73,7 +73,7 @@ export function PendingBubble({
         {queued && (
           <span className="ml-1 flex shrink-0 items-center gap-1">
             {onSendNow && (
-              <button type="button" onClick={onSendNow} className="tap relative rounded-full px-2 py-0.5 font-medium text-ink hover:bg-hover">
+              <button type="button" onClick={onSendNow} title="Stops the current turn and sends this now" className="tap relative rounded-full px-2 py-0.5 font-medium text-ink hover:bg-hover">
                 Send now
               </button>
             )}

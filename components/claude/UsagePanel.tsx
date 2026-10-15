@@ -178,7 +178,7 @@ function Tokens({ totals }: { totals: UsageTotals }) {
 function Sparkline({ points, window }: { points: { t: number; used: number }[]; window: number }) {
   const W = 300;
   const H = 48;
-  const peak = Math.max(1, ...points.map((p) => p.used));
+  const peak = points.reduce((m, p) => Math.max(m, p.used), 1);
   const xs = points.length > 1 ? points.map((_, i) => (i / (points.length - 1)) * W) : [0, W];
   const ys = (points.length > 1 ? points : [points[0], points[0]]).map((p) => H - 2 - (p.used / peak) * (H - 6));
   const line = xs.map((x, i) => `${i ? "L" : "M"}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(" ");

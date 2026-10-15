@@ -286,6 +286,17 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
     if (!id) return;
     dispatch({ type: "status", status: "connecting" });
     const abort = new AbortController();
+    /* a phone back from sleep, or a network that changed, usually holds a stream that is already dead; drop it now
+     * instead of waiting out the stall timer */
+    let kick: (() => void) | undefined;
+    let hiddenAt = 0;
+    const onVisible = () => {
+      if (document.visibilityState === "hidden") hiddenAt = Date.now();
+      else if (hiddenAt && Date.now() - hiddenAt > 20_000) kick?.();
+    };
+    const onOnline = () => kick?.();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
     /* history over a plain fetch, then a live stream from where it ended. The stream is a POST
      * read with fetch (not EventSource): some tunnels buffer GET event streams until they close. */
     (async () => {
@@ -333,8 +344,12 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
             let stall: ReturnType<typeof setTimeout> | undefined;
             const timeout = new Promise<never>((_, reject) => {
               stall = setTimeout(() => reject(new Error("stalled")), 40_000);
+              kick = () => reject(new Error("woke"));
             });
-            const { value, done } = await Promise.race([reader.read(), timeout]).finally(() => clearTimeout(stall)).catch((err) => {
+            const { value, done } = await Promise.race([reader.read(), timeout]).finally(() => {
+              clearTimeout(stall);
+              kick = undefined;
+            }).catch((err) => {
               void reader.cancel().catch(() => undefined);
               throw err;
             });
@@ -366,7 +381,11 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
         await wake(Math.min(8000, 500 * 2 ** attempt), abort.signal);
       }
     })();
-    return () => abort.abort();
+    return () => {
+      abort.abort();
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+    };
   }, [id]);
 
   const cursorRef = useRef(view.cursor);

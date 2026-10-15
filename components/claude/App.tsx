@@ -13,6 +13,7 @@ import { AGENTS_TAB, FILES_TAB, NEW_TAB, useTabs, VIEW_TABS } from "./useTabs";
 import { AgentsScreen } from "./AgentsScreen";
 import { FilesScreen, OPEN_FILES_EVENT } from "./FilesScreen";
 import { OfflineBanner } from "./OfflineBanner";
+import { useKeyboardInset } from "@/lib/client/useKeyboardInset";
 
 const isEditable = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && !["checkbox", "radio", "button"].includes((t as HTMLInputElement).type)));
@@ -51,6 +52,7 @@ export function App() {
   const [themeKey, setThemeKey] = useState(0);
   const onTheme = useCallback(() => setThemeKey((k) => k + 1), []);
   const { sessions, projects, error, refresh } = useSessions();
+  useKeyboardInset();
   const [terminal, setTerminal] = useState<TerminalTarget | null>(null);
   useEffect(() => {
     const open = (e: Event) => setTerminal((e as CustomEvent<TerminalTarget>).detail);
@@ -200,7 +202,7 @@ export function App() {
   const activeIndex = openTabs.findIndex((t) => t.id === active);
 
   return (
-    <main className="flex h-[100dvh] bg-page text-ink">
+    <main className="flex h-[calc(100dvh-var(--kb,0px))] bg-page text-ink">
       <aside
         className="shell-sidebar relative z-20 hidden shrink-0 bg-sidebar lg:block"
         style={{ width: sidebar.collapsed ? 52 : 260 }}
@@ -287,7 +289,7 @@ export function App() {
         </div>
       </div>
 
-      {terminal && <WebTerminal target={terminal} onClose={() => setTerminal(null)} />}
+      {terminal && <WebTerminal key={JSON.stringify(terminal)} target={terminal} onClose={() => setTerminal(null)} />}
       <OfflineBanner />
       <CommandPalette sessions={sessions} activeId={sessionId} onOpen={openSession} onNew={newTab} onView={openView} onTheme={onTheme} />
       <AskHost />

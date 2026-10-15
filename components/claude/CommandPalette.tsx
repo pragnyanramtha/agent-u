@@ -111,6 +111,8 @@ export function CommandPalette({
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "k") return;
+      /* Ctrl+K in a shell kills to end of line */
+      if (e.ctrlKey && !e.metaKey && e.target instanceof Element && e.target.closest(".xterm")) return;
       e.preventDefault();
       e.stopPropagation();
       if (panelRef.current) setOpen(false);
