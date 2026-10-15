@@ -216,6 +216,16 @@ if (id) {
     assert(Date.now() - t0 < 200_000, "took too long");
   });
 
+  await check("a prompt longer than one command-line argument allows still goes through", async () => {
+    const filler = "lorem ipsum dolor sit amet ".repeat(2700);
+    const r = await send(`Ignore the filler text after this line and reply with exactly the word LONGOK.\n\n${filler}`, cid("long70k"));
+    assert(r.status === 200, `got ${r.status} ${JSON.stringify(r.body)}`);
+    await until("LONGOK", async () => {
+      const x = await session(id);
+      return x?.run?.status !== "running" && /LONGOK/.test(assistantText(x));
+    }, 180_000);
+  });
+
   await check("history pages back without losing or repeating entries", async () => {
     const s = await session(id);
     const all = s.entries.map((e) => e.id);
