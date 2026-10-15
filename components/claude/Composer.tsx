@@ -732,7 +732,7 @@ export function Composer({
             aria-haspopup="menu"
             aria-expanded={openMenu === "pick"}
             aria-controls={openMenu === "pick" ? `${uid}-pick` : undefined}
-            aria-label={`${pickable ? `Agent: ${agentLabel}, model` : "Model"}: ${modelLabel(model)}. Approvals: ${currentMode.name}`}
+            aria-label={`${pickable ? `Agent: ${agentLabel}, model` : "Model"}: ${modelName(model)}. Approvals: ${currentMode.name}`}
             title={`Approvals: ${currentMode.name}`}
             onClick={() => toggleMenu("pick")}
             onKeyDown={(e) => {
