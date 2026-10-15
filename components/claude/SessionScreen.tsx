@@ -139,7 +139,7 @@ export function SessionScreen({
     async (localId: string, text: string) => {
       updatePending(localId, { state: "sending", error: undefined, at: Date.now() });
       try {
-        const res = await postReliably<{ id: string; via?: "terminal" | "web"; cleared?: string | null }>(
+        const res = await postReliably<{ id: string; via?: "terminal" | "web" | "queued"; cleared?: string | null }>(
           `/api/sessions/${id}/message`,
           { text, model: localModel ?? undefined, permissionMode: localMode ?? undefined, profile: localProfile ?? undefined },
           localId,
@@ -480,9 +480,16 @@ export function SessionScreen({
           <PendingBubble
             pending={p}
             where={where}
+            agentName={agentName}
             claudeBusy={Boolean(busy)}
+            queued={p.via === "queued" && view.queue.includes(p.localId)}
             onRetry={() => void deliver(p.localId, p.text)}
             onDiscard={() => dropPending(p.localId)}
+            onUnqueue={() => {
+              dropPending(p.localId);
+              void control("unqueue", p.localId);
+            }}
+            onSendNow={() => void control("interrupt")}
           />
         )}
         bottomPad={composerH}

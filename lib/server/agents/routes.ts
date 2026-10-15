@@ -8,7 +8,7 @@ import { terminalOf, toRunState } from "./bridge";
 import { onDelta, onTurn } from "./cli-run";
 import { adapterFor, sessionKey } from "./index";
 import { handoffTitle } from "@/lib/handoff-text";
-import { guardTurn, onSessionEvent, sameStore } from "../fallback";
+import { guardTurn, onSessionEvent, postNotice, postToSession, sameStore } from "../fallback";
 import { pickProfile, setSessionProfile, withProfile } from "../profiles";
 
 /* Route handlers for non-Claude sessions (ids "<agent>:<nativeId>").
@@ -16,6 +16,72 @@ import { pickProfile, setSessionProfile, withProfile } from "../profiles";
 
 const notFound = () => NextResponse.json({ error: "Session not found" }, { status: 404 });
 const modes = new Map<string, PermissionMode>();
+
+/* Messages sent while a web-driven turn runs wait here and go out, in order, when it ends
+ * (or is stopped): the CLIs take one prompt per turn. Keyed by session key; the item id is
+ * the client's message id, so the client can take one back. */
+type Queued = { id: string; text: string; model?: string; mode: PermissionMode; profile: unknown };
+const g = globalThis as { __agentuQueues?: Map<string, Queued[]>; __agentuDrains?: Map<string, () => void> };
+const queues: Map<string, Queued[]> = (g.__agentuQueues ??= new Map());
+const drains: Map<string, () => void> = (g.__agentuDrains ??= new Map());
+
+const queueEvent = (key: string): ServerEvent => ({ type: "queue", items: (queues.get(key) ?? []).map(({ id, text }) => ({ id, text })) });
+const announce = (key: string) => postToSession(key, queueEvent(key));
+
+function enqueue(agent: AgentId, native: string, item: Queued) {
+  const key = sessionKey(agent, native);
+  const list = queues.get(key) ?? [];
+  if (!list.some((q) => q.id === item.id)) list.push(item);
+  queues.set(key, list);
+  announce(key);
+  if (!drains.has(key)) drains.set(key, onTurn(key, (s) => s.status !== "running" && void drain(agent, native)));
+}
+
+async function drain(agent: AgentId, native: string) {
+  const key = sessionKey(agent, native);
+  const a = await adapterFor(agent);
+  const list = queues.get(key) ?? [];
+  if (!a || a.runState(native)?.status === "running") return;
+  const next = list.shift();
+  if (!list.length) {
+    queues.delete(key);
+    drains.get(key)?.();
+    drains.delete(key);
+  }
+  announce(key);
+  if (!next) return;
+  const res = await sendNow(agent, native, next.text, next);
+  if (!res.ok) postNotice(key, `Couldn't send a queued message: ${res.error}`, "warn");
+}
+
+export function unqueue(agent: AgentId, native: string, id: string) {
+  const key = sessionKey(agent, native);
+  const list = (queues.get(key) ?? []).filter((q) => q.id !== id);
+  if (list.length) queues.set(key, list);
+  else {
+    queues.delete(key);
+    drains.get(key)?.();
+    drains.delete(key);
+  }
+  announce(key);
+}
+
+async function sendNow(agent: AgentId, native: string, text: string, o: { model?: string; mode: PermissionMode; profile: unknown }): Promise<{ ok: true } | { ok: false; error: string; status: number; code?: string }> {
+  const a = await adapterFor(agent);
+  if (!a) return { ok: false, error: "Session not found", status: 404 };
+  const key = sessionKey(agent, native);
+  const before = pickProfile(agent, null, key);
+  const profile = pickProfile(agent, o.profile, key);
+  if (!sameStore(before, profile)) return { ok: false, error: `${profile.label} keeps its sessions elsewhere. Use "Continue in" to move this session there.`, status: 409, code: "other_store" };
+  try {
+    await withProfile(profile, () => a.send(native, text, { model: o.model, mode: o.mode }));
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err), status: 502 };
+  }
+  setSessionProfile(key, profile.id);
+  guardTurn({ key, text, mode: o.mode, model: o.model, profile });
+  return { ok: true };
+}
 
 export async function agentHistory(agent: AgentId, native: string, before: string | null) {
   const a = await adapterFor(agent);
@@ -70,6 +136,7 @@ export async function agentEvents(req: NextRequest, agent: AgentId, native: stri
       };
       const runOf = () => toRunState(key, a.runState(native), modes.get(key) ?? "default", session?.model ?? null);
       send({ type: "history", entries: [], cursor: null, terminal, run: runOf(), title: handoffTitle(session?.title ?? "") || `New ${a.label} session`, cwd: session?.cwd ?? "", permissionMode: modes.get(key) ?? null, profile: pickProfile(agent, null, key).id });
+      if (queues.get(key)?.length) send(queueEvent(key));
       cleanups.push(onSessionEvent(key, (e) => send(e)));
       cleanups.push(a.watch(native, start, (entries, end) => entries.length && send({ type: "entries", entries }, end)));
       cleanups.push(onTurn(key, () => send({ type: "run", run: runOf() })));
@@ -134,20 +201,19 @@ export async function agentMessage(agent: AgentId, native: string, body: Record<
       return NextResponse.json({ error: `Couldn't type into the terminal: ${err instanceof Error ? err.message.slice(0, 160) : err}` }, { status: 502 });
     }
   }
-  if (a.runState(native)?.status === "running") return NextResponse.json({ error: `${a.label} is still working on the last message. Wait for it to finish.`, code: "busy" }, { status: 409 });
-  const before = pickProfile(agent, null, key);
-  const profile = pickProfile(agent, body.profile, key);
-  if (!sameStore(before, profile)) {
-    return NextResponse.json({ error: `${profile.label} keeps its sessions elsewhere. Use "Continue in" to move this session there.`, code: "other_store" }, { status: 409 });
-  }
   const model = str(body.model) || undefined;
-  try {
-    await withProfile(profile, () => a.send(native, text, { model, mode }));
-  } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
+  if (a.runState(native)?.status === "running" || queues.get(key)?.length) {
+    const before = pickProfile(agent, null, key);
+    if (!sameStore(before, pickProfile(agent, body.profile, key))) {
+      return NextResponse.json({ error: `That profile keeps its sessions elsewhere. Use "Continue in" to move this session there.`, code: "other_store" }, { status: 409 });
+    }
+    enqueue(agent, native, { id: str(body.clientId) || `q${Date.now().toString(36)}`, text, model, mode, profile: body.profile });
+    /* the turn may have ended while this was queued */
+    if (a.runState(native)?.status !== "running") void drain(agent, native);
+    return NextResponse.json({ id: key, via: "queued" });
   }
-  setSessionProfile(key, profile.id);
-  guardTurn({ key, text, mode, model, profile });
+  const res = await sendNow(agent, native, text, { model, mode, profile: body.profile });
+  if (!res.ok) return NextResponse.json({ error: res.error, code: res.code }, { status: res.status });
   return NextResponse.json({ id: key, via: "web" });
 }
 
@@ -185,6 +251,7 @@ export async function agentControl(agent: AgentId, native: string, body: Record<
   if (!a) return notFound();
   const key = sessionKey(agent, native);
   if (body.action === "interrupt" || body.action === "stop") await a.stop(native);
+  else if (body.action === "unqueue") unqueue(agent, native, str(body.value) ?? "");
   else if (body.action === "mode") {
     const mode = parseMode(body.value);
     if (!mode) return NextResponse.json({ error: "Unknown permission mode." }, { status: 400 });

@@ -130,4 +130,6 @@ export type ServerEvent =
   /** the session got (or changed) its title after the stream opened */
   | { type: "title"; title: string }
   | { type: "redirect"; sessionId: string }
+  /** messages waiting for the running turn of a non-Claude agent to end, oldest first */
+  | { type: "queue"; items: { id: string; text: string }[] }
   | { type: "ping" };

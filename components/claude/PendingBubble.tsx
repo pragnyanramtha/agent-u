@@ -15,15 +15,25 @@ const SLOW_MS = 90_000;
 export function PendingBubble({
   pending,
   where,
+  agentName = "Claude",
   claudeBusy,
+  queued = false,
   onRetry,
   onDiscard,
+  onUnqueue,
+  onSendNow,
 }: {
   pending: Pending;
   where: string | null;
+  agentName?: string;
   claudeBusy: boolean;
+  /** held by the server until the agent's running turn ends */
+  queued?: boolean;
   onRetry: () => void;
   onDiscard: () => void;
+  onUnqueue?: () => void;
+  /** stops the running turn so this goes out now */
+  onSendNow?: () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -32,17 +42,19 @@ export function PendingBubble({
     return () => clearInterval(t);
   }, [pending.state]);
 
-  const slow = pending.state === "sent" && now - pending.at > SLOW_MS;
-  const target = pending.via === "terminal" ? where ?? "the terminal" : "Claude";
+  const slow = pending.state === "sent" && !queued && pending.via !== "queued" && now - pending.at > SLOW_MS;
+  const target = pending.via === "terminal" ? where ?? "the terminal" : agentName;
   const status =
     pending.state === "sending"
       ? { icon: <Clock width={12} height={12} strokeWidth={2} />, text: pending.via === "terminal" || where ? `Typing into ${where ?? "the terminal"}…` : "Sending…", tone: "text-ink-3" }
       : pending.state === "failed"
         ? { icon: <WarningTriangle width={12} height={12} strokeWidth={2} />, text: pending.error ?? "Couldn't send.", tone: "text-red-ink" }
+        : queued
+          ? { icon: <Clock width={12} height={12} strokeWidth={2} />, text: `Queued. Sends when ${agentName} finishes.`, tone: "text-ink-3" }
         : slow
           ? { icon: <WarningTriangle width={12} height={12} strokeWidth={2} />, text: `Sent to ${target}, but it isn't in this conversation yet. Check the terminal view.`, tone: "text-orange-ink" }
-          : claudeBusy
-            ? { icon: <Clock width={12} height={12} strokeWidth={2} />, text: `Queued. ${target === "Claude" ? "Claude" : "Claude in " + target} reads it after the current step.`, tone: "text-ink-3" }
+          : claudeBusy && pending.via !== "queued"
+            ? { icon: <Clock width={12} height={12} strokeWidth={2} />, text: `Queued. ${pending.via === "terminal" ? `${agentName} in ${target}` : agentName} reads it after the current step.`, tone: "text-ink-3" }
             : { icon: <Check width={12} height={12} strokeWidth={2.2} />, text: `Delivered to ${target}`, tone: "text-ink-3" };
 
   return (
@@ -58,6 +70,20 @@ export function PendingBubble({
       <div role="status" className={`flex max-w-full items-center gap-1.5 text-[11.5px] ${status.tone}`}>
         <span className="shrink-0">{status.icon}</span>
         <span className="min-w-0">{status.text}</span>
+        {queued && (
+          <span className="ml-1 flex shrink-0 items-center gap-1">
+            {onSendNow && (
+              <button type="button" onClick={onSendNow} className="tap relative rounded-full px-2 py-0.5 font-medium text-ink hover:bg-hover">
+                Send now
+              </button>
+            )}
+            {onUnqueue && (
+              <button type="button" onClick={onUnqueue} className="tap relative rounded-full px-2 py-0.5 font-medium text-ink-2 hover:bg-hover">
+                Remove
+              </button>
+            )}
+          </span>
+        )}
         {(pending.state === "failed" || slow) && (
           <span className="ml-1 flex shrink-0 items-center gap-1">
             {pending.state === "failed" && (

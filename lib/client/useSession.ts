@@ -11,7 +11,7 @@ export type Pending = {
   text: string;
   at: number;
   state: "sending" | "sent" | "failed";
-  via?: "terminal" | "web";
+  via?: "terminal" | "web" | "queued";
   error?: string;
 };
 
@@ -92,6 +92,8 @@ export type SessionView = {
   /** live streams (see isLive) already replaced by persisted entries */
   dropped: Set<string>;
   pending: Pending[];
+  /** ids of messages the server holds until the running turn ends (non-Claude agents) */
+  queue: string[];
 };
 
 type Action =
@@ -121,6 +123,7 @@ const initial = (): SessionView => ({
   streams: [],
   dropped: new Set(),
   pending: [],
+  queue: [],
 });
 
 /* Folds a batch into the view: tool results attach by id, everything else is
@@ -202,6 +205,7 @@ function reducer(state: SessionView, action: Action): SessionView {
       if (e.type === "entries") return merge(state, e.entries, "append");
       if (e.type === "terminal") return { ...state, terminal: e.terminal };
       if (e.type === "title") return { ...state, title: e.title };
+      if (e.type === "queue") return { ...state, queue: e.items.map((q) => q.id) };
       if (e.type === "run") {
         const ended = !e.run || e.run.status === "idle" || e.run.status === "closed" || e.run.status === "error";
         return { ...state, run: e.run, streams: ended ? [] : state.streams };
