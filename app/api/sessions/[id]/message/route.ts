@@ -8,6 +8,7 @@ import { agentMessage } from "@/lib/server/agents/routes";
 import { once } from "@/lib/server/dedupe";
 import { guardTurn, sameStore } from "@/lib/server/fallback";
 import { pickProfile, setSessionProfile } from "@/lib/server/profiles";
+import { beforeTurn } from "@/lib/server/checkpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -24,8 +25,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const body = await readJson(req);
   const key = parseSessionKey(decodeURIComponent(raw));
   if (!key) return NextResponse.json({ error: "Session not found" }, { status: 404 });
-  if (key.agent !== "claude") return once(body.clientId, () => agentMessage(key.agent, key.native, body));
-  return once(body.clientId, () => claudeMessage(key.native, body));
+  const text = str(body.text)?.trim();
+  const checkpointFirst = async () => text && (await beforeTurn(decodeURIComponent(raw), text));
+  if (key.agent !== "claude") return once(body.clientId, async () => (await checkpointFirst(), agentMessage(key.agent, key.native, body)));
+  return once(body.clientId, async () => (await checkpointFirst(), claudeMessage(key.native, body)));
 }
 
 async function claudeMessage(id: string, body: Record<string, unknown>) {

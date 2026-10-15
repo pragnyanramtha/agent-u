@@ -272,6 +272,67 @@ if (id) {
   ev.close();
 }
 
+/* ── git: checkpoints, rewind, worktree ───────────────── */
+
+const repo = fs.mkdtempSync(path.join(os.tmpdir(), "agentu-e2e-git-"));
+const gitIn = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "e2e", GIT_AUTHOR_EMAIL: "e2e@e2e", GIT_COMMITTER_NAME: "e2e", GIT_COMMITTER_EMAIL: "e2e@e2e" } });
+gitIn("init", "-q", "-b", "main");
+fs.writeFileSync(path.join(repo, "README.md"), "e2e\n");
+gitIn("add", "-A");
+gitIn("commit", "-qm", "init");
+let gid = "";
+await check("git: a checkpoint before each turn, changes since, and rewind", async () => {
+  const r = await post("/api/sessions", { agent: AGENT, cwd: repo, model, permissionMode: "bypassPermissions", text: "Reply with exactly the word READY.", clientId: cid("gstart") });
+  assert(r.status === 200 && r.body.id, `start: ${r.status} ${JSON.stringify(r.body)}`);
+  gid = r.body.id;
+  const g0 = await get(`/api/git?session=${enc(gid)}`);
+  assert(g0.status === 200 && g0.body.repo?.branch === "main", `git: ${g0.status} ${JSON.stringify(g0.body)}`);
+  assert(g0.body.checkpoints.length === 1, `first message checkpoint: ${g0.body.checkpoints.length}`);
+  await until("READY", async () => {
+    const x = await session(gid);
+    return x?.run?.status !== "running" && /READY/.test(assistantText(x));
+  }, 180_000);
+  const m = await post(`/api/sessions/${enc(gid)}/message`, { text: "Create a file named made.txt containing the word MADE. Then reply DONE.", clientId: cid("gmake"), model, permissionMode: "bypassPermissions" });
+  assert(m.status === 200, `message: ${m.status}`);
+  await until("made.txt", async () => {
+    const x = await session(gid);
+    return x?.run?.status !== "running" && fs.existsSync(path.join(repo, "made.txt"));
+  }, 180_000);
+  const g1 = await get(`/api/git?session=${enc(gid)}`);
+  const cps = g1.body.checkpoints;
+  assert(cps.length >= 1, "no checkpoints");
+  const before = cps[0];
+  const since = await post("/api/git", { session: gid, action: "since", id: before.id });
+  assert(since.body.files?.some((f) => f.path === "made.txt"), `since: ${JSON.stringify(since.body)}`);
+  const rw = await post("/api/git", { session: gid, action: "rewind", id: before.id });
+  assert(rw.status === 200 && rw.body.removed >= 1, `rewind: ${rw.status} ${JSON.stringify(rw.body)}`);
+  assert(!fs.existsSync(path.join(repo, "made.txt")), "made.txt still there");
+  assert(gitIn("log", "--oneline").trim().split("\n").length === 1, "rewind touched history");
+  const undo = await post("/api/git", { session: gid, action: "rewind", id: rw.body.undo });
+  assert(undo.status === 200 && fs.existsSync(path.join(repo, "made.txt")), "undo didn't bring made.txt back");
+});
+
+await check("git: commit from the panel", async () => {
+  const c = await post("/api/git", { session: gid, action: "commit", message: "e2e commit" });
+  assert(c.status === 200 && c.body.commit, `commit: ${c.status} ${JSON.stringify(c.body)}`);
+  assert(gitIn("log", "-1", "--format=%s").trim() === "e2e commit", "not committed");
+  const p = await post("/api/git", { session: gid, action: "push" });
+  assert(p.status === 400 && /no remote/i.test(p.body.error), `push without remote: ${p.status}`);
+});
+
+await check("git: a session can start in its own worktree", async () => {
+  const r = await post("/api/sessions", { agent: AGENT, cwd: repo, model, worktree: true, permissionMode: "bypassPermissions", text: "Reply with exactly the word TREE.", clientId: cid("wt") });
+  assert(r.status === 200 && r.body.worktree?.branch?.startsWith("agent-u/"), `worktree: ${r.status} ${JSON.stringify(r.body)}`);
+  assert(gitIn("worktree", "list").includes(r.body.worktree.dir), "not in worktree list");
+  const g = await get(`/api/git?session=${enc(r.body.id)}`);
+  assert(g.body.repo?.branch === r.body.worktree.branch, `session branch: ${g.body.repo?.branch}`);
+  await until("TREE", async () => {
+    const x = await session(r.body.id);
+    return x?.run?.status !== "running" && /TREE/.test(assistantText(x));
+  }, 180_000);
+  gitIn("worktree", "remove", "--force", r.body.worktree.dir);
+});
+
 /* ── web terminal backend ─────────────────────────────── */
 
 function ws(query) {

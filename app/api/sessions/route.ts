@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
@@ -9,6 +10,8 @@ import { agentStart } from "@/lib/server/agents/routes";
 import { once } from "@/lib/server/dedupe";
 import { guardTurn } from "@/lib/server/fallback";
 import { pickProfile, setSessionProfile } from "@/lib/server/profiles";
+import { beforeTurn } from "@/lib/server/checkpoints";
+import { GitError, moveCheckpoints, newWorktree } from "@/lib/server/git";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +23,37 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await readJson(req);
-  return once(body.clientId, () => start(body));
+  return once(body.clientId, () => startWithGit(body));
+}
+
+/* an optional worktree to start in, and a checkpoint of the folder before the first turn (kept under a
+ * provisional key until the session has its id) */
+async function startWithGit(body: Record<string, unknown>) {
+  const cwd = str(body.cwd)?.trim();
+  const text = str(body.text)?.trim();
+  let worktree: { dir: string; branch: string } | null = null;
+  if (body.worktree === true && cwd && text) {
+    try {
+      worktree = await newWorktree(cwd, text.slice(0, 40));
+    } catch (err) {
+      return NextResponse.json({ error: `Couldn't make a worktree: ${(err as Error).message}` }, { status: err instanceof GitError ? err.status : 500 });
+    }
+    body = { ...body, cwd: worktree.dir };
+  }
+  const dir = str(body.cwd)?.trim();
+  const provisional = `pending-${crypto.randomUUID()}`;
+  if (dir && text && path.isAbsolute(dir)) await beforeTurn(provisional, text, dir);
+  const res = await start(body);
+  if (res.ok && dir) {
+    const data = (await res.clone().json().catch(() => null)) as { id?: string } | null;
+    if (data?.id) {
+      const agent = str(body.agent) as AgentId | undefined;
+      const key = agent && agent !== "claude" && !data.id.includes(":") ? `${agent}:${data.id}` : data.id;
+      await moveCheckpoints(dir, provisional, key).catch(() => undefined);
+      if (worktree) return NextResponse.json({ ...data, worktree });
+    }
+  }
+  return res;
 }
 
 async function start(body: Record<string, unknown>) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, Folder, GitCompare, Menu, MoreHoriz, StatsReport, Terminal, Xmark } from "iconoir-react";
+import { ArrowRight, Folder, GitBranch, GitCompare, Menu, MoreHoriz, StatsReport, Terminal, Xmark } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type PermissionMode, type ServerTerminal } from "@/lib/types";
 import { AGENT_TONE, AgentMark } from "./SessionList";
 import { OPEN_TERMINAL_EVENT } from "./CommandPalette";
@@ -19,6 +19,7 @@ import { AskCards } from "./AskCards";
 import { Composer, MODELS } from "./Composer";
 import { MODE_ALIASES } from "@/lib/commands";
 import { ChangesPanel, collectChanges } from "./ChangesPanel";
+import { GitPanel } from "./GitPanel";
 import { OPEN_USAGE_EVENT } from "./ContextRing";
 import { UsagePanel } from "./UsagePanel";
 import { sessionCost } from "@/lib/client/usage";
@@ -67,6 +68,7 @@ export function SessionScreen({
   const [menuOpen, setMenuOpen] = useState(false);
   const [peek, setPeek] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [gitOpen, setGitOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   useEffect(() => {
     const open = () => {
@@ -333,6 +335,7 @@ export function SessionScreen({
               type="button"
               onClick={() => {
                 setUsageOpen(false);
+                setGitOpen(false);
                 setChangesOpen((v) => !v);
               }}
               aria-pressed={changesOpen}
@@ -418,6 +421,21 @@ export function SessionScreen({
                   <StatsReport width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
                   Usage and cost
                 </button>
+                {view.cwd && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      setChangesOpen(false);
+                      setGitOpen(true);
+                    }}
+                    className="menu-item"
+                  >
+                    <GitBranch width={15} height={15} strokeWidth={1.8} className="shrink-0 text-ink-3" aria-hidden />
+                    Git and checkpoints
+                  </button>
+                )}
                 {terminal && !run && (
                   <button
                     type="button"
@@ -634,6 +652,7 @@ export function SessionScreen({
     </section>
     {usageOpen && <UsagePanel view={view} onClose={() => setUsageOpen(false)} />}
     {handoffOpen && <HandoffDialog id={id} agent={agent} current={profileId} mode={mode} onClose={() => setHandoffOpen(false)} onOpen={onNavigate} />}
+    {gitOpen && !changesOpen && <GitPanel session={id} busy={Boolean(busy)} onClose={() => setGitOpen(false)} />}
     {changesOpen && <ChangesPanel changes={changes} cwd={view.cwd} partial={view.cursor !== null} onClose={() => setChangesOpen(false)} />}
     </div>
   );

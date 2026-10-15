@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Clock, Menu } from "iconoir-react";
+import { Check, Clock, Menu } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type PermissionMode, type SessionSummary } from "@/lib/types";
 import { api, ApiError, timeAgo } from "@/lib/client/api";
 import { profileModels, useAgentModels, profilesFor, useProfiles } from "@/lib/client/useProfiles";
@@ -125,6 +125,13 @@ export function NewSession({
   const all = sessions ?? [];
   const rows = [...all.filter(isLive), ...all.filter((s) => !isLive(s))].slice(0, 3);
 
+  const [worktree, setWorktree] = useState(false);
+  useEffect(() => {
+    try {
+      setWorktree(localStorage.getItem("cui:worktree") === "1");
+    } catch {}
+  }, []);
+
   const start = async (text: string) => {
     setError(null);
     if (!cwd.trim()) {
@@ -134,7 +141,7 @@ export function NewSession({
       return false;
     }
     try {
-      const { id } = await api<{ id: string }>("/api/sessions", { agent, profile, cwd: cwd.trim(), text, model: model || undefined, permissionMode: mode, clientId: newClientId() });
+      const { id } = await api<{ id: string }>("/api/sessions", { agent, profile, cwd: cwd.trim(), text, model: model || undefined, permissionMode: mode, worktree, clientId: newClientId() });
       localStorage.setItem("cui:lastCwd", cwd.trim());
       onOpen(id);
       return true;
@@ -218,7 +225,24 @@ export function NewSession({
                 {error}
               </p>
             )}
-            <div className="flex justify-end px-3 pt-2">
+            <div className="flex items-center justify-between gap-3 px-3 pt-2">
+              <button
+                type="button"
+                aria-pressed={worktree}
+                onClick={() => {
+                  setWorktree((v) => !v);
+                  try {
+                    localStorage.setItem("cui:worktree", worktree ? "0" : "1");
+                  } catch {}
+                }}
+                title="Start on a new branch in its own folder, so the main checkout stays as it is"
+                className={`tap relative inline-flex items-center gap-1.5 rounded-chip px-1 text-[12.5px] transition-colors duration-150 ${worktree ? "text-ink" : "text-ink-3 hover:text-ink"}`}
+              >
+                <span aria-hidden className={`flex size-3.5 items-center justify-center rounded-[4px] border ${worktree ? "border-ink bg-ink text-surface" : "border-line-strong"}`}>
+                  {worktree && <Check width={10} height={10} strokeWidth={3} />}
+                </span>
+                New git worktree
+              </button>
               <button
                 type="button"
                 onClick={startInTerminal}
