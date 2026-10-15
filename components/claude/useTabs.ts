@@ -7,7 +7,8 @@ export const NEW_TAB = "new";
 /** tabs that show a tool instead of a session */
 export const FILES_TAB = "@files";
 export const AGENTS_TAB = "@agents";
-export const VIEW_TABS: Record<string, string> = { [FILES_TAB]: "Files", [AGENTS_TAB]: "Agents" };
+export const INBOX_TAB = "@inbox";
+export const VIEW_TABS: Record<string, string> = { [FILES_TAB]: "Files", [AGENTS_TAB]: "Agents", [INBOX_TAB]: "Inbox" };
 
 /** An open tab: a session id (or NEW_TAB) plus the last title we saw, so reloads paint names before the list loads. */
 export type Tab = { id: string; title?: string };

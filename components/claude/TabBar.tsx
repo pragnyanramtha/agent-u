@@ -6,7 +6,7 @@ import { AGENT_LABEL, type AgentId, type SessionSummary } from "@/lib/types";
 import { timeAgo } from "@/lib/client/api";
 import { Pulse } from "./Pulse";
 import { AGENT_TONE, AgentBadge, isBusy } from "./SessionList";
-import { AGENTS_TAB, NEW_TAB, VIEW_TABS, type Tab } from "./useTabs";
+import { AGENTS_TAB, INBOX_TAB, NEW_TAB, VIEW_TABS, type Tab } from "./useTabs";
 
 /* ─────────────────────────────────────────────────────────
  * TABS
@@ -32,7 +32,7 @@ export type TabInfo = {
 
 export function describeTab(tab: Tab, session: SessionSummary | undefined, listLoaded: boolean, now = Date.now()): TabInfo {
   if (tab.id === NEW_TAB) return { id: tab.id, title: "New session", agent: "claude", live: false, busy: false, needsYou: false, meta: null };
-  if (VIEW_TABS[tab.id]) return { id: tab.id, title: VIEW_TABS[tab.id], agent: "claude", live: false, busy: false, needsYou: false, meta: tab.id === AGENTS_TAB ? "Terminals and profiles" : "Files on the server" };
+  if (VIEW_TABS[tab.id]) return { id: tab.id, title: VIEW_TABS[tab.id], agent: "claude", live: false, busy: false, needsYou: false, meta: tab.id === AGENTS_TAB ? "Terminals and profiles" : tab.id === INBOX_TAB ? "Waiting on you" : "Files on the server" };
   const agent = (tab.id.includes(":") ? tab.id.slice(0, tab.id.indexOf(":")) : "claude") as AgentId;
   if (!session) {
     return { id: tab.id, title: tab.title ?? (listLoaded ? "Session" : "Loading…"), agent: AGENT_LABEL[agent] ? agent : "claude", live: false, busy: false, needsYou: false, meta: null };

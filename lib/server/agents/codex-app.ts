@@ -1,5 +1,5 @@
 import type { PermissionMode } from "@/lib/types";
-import { killGroup, liveStream, startTurn, type Run } from "./cli-run";
+import { askUser, killGroup, liveStream, startTurn, type Run } from "./cli-run";
 import { errorText } from "./codex-parse";
 
 /* One web-driven Codex turn over `codex app-server` (JSON-RPC 2.0, one JSON
@@ -35,10 +35,12 @@ export type AppTurnOptions = {
   onThread?: (id: string) => void;
 };
 
-/* exec can't show approval prompts and neither can this: never ask, the sandbox is the only guard */
-function threadSettings(mode: PermissionMode, model?: string) {
+/* Ask first: Codex asks before anything it doesn't trust. Accept edits: it works inside the folder and asks only to
+ * step outside the sandbox. Plan: read-only, nothing to ask. Bypass: no sandbox, no questions. */
+export function threadSettings(mode: PermissionMode, model?: string) {
   const sandbox = mode === "bypassPermissions" ? "danger-full-access" : mode === "plan" ? "read-only" : "workspace-write";
-  return { approvalPolicy: "never", sandbox, ...(model ? { model } : {}) };
+  const approvalPolicy = mode === "default" ? "untrusted" : mode === "acceptEdits" ? "on-request" : "never";
+  return { approvalPolicy, sandbox, ...(model ? { model } : {}) };
 }
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
@@ -94,16 +96,32 @@ export function appServerTurn(o: AppTurnOptions): Run {
     else if (m.method) notify(m.method, obj(m.params));
   }
 
-  /** Server-initiated requests. With approvalPolicy "never" approvals shouldn't come; decline any that do. */
+  /** Server-initiated requests: approvals become cards in the session; anything else is refused. */
   function answer(m: Msg) {
-    const decline =
-      m.method === "item/commandExecution/requestApproval" || m.method === "item/fileChange/requestApproval"
-        ? { decision: "decline" }
-        : m.method === "execCommandApproval" || m.method === "applyPatchApproval"
-          ? { decision: { denied: { rejection: "Approvals can't be answered from the web UI." } } }
-          : null;
-    if (decline) write({ id: m.id, result: decline });
-    else write({ id: m.id, error: { code: -32601, message: `${m.method} isn't supported by agent-u` } });
+    const p = obj(m.params);
+    const v2 = m.method === "item/commandExecution/requestApproval" || m.method === "item/fileChange/requestApproval";
+    const legacy = m.method === "execCommandApproval" || m.method === "applyPatchApproval";
+    if (!v2 && !legacy) return write({ id: m.id, error: { code: -32601, message: `${m.method} isn't supported by agent-u` } });
+    if (typeof p.threadId === "string" && threadId && p.threadId !== threadId) return write({ id: m.id, result: { decision: v2 ? "decline" : "denied" } });
+    const command = Array.isArray(p.command) ? p.command.map(String).join(" ") : str(p.command);
+    const isCommand = m.method === "item/commandExecution/requestApproval" || m.method === "execCommandApproval";
+    const reason = str(p.reason) || null;
+    askUser(
+      run,
+      {
+        kind: "permission",
+        requestId: `codex-${String(m.id)}`,
+        toolName: isCommand ? "Bash" : "Edit",
+        title: isCommand ? (command ? `Run ${command.length > 120 ? `${command.slice(0, 119)}…` : command}` : "Run a command") : str(p.grantRoot) ? `Write outside the folder, in ${str(p.grantRoot)}` : "Edit files",
+        description: reason,
+        input: isCommand ? { command, ...(str(p.cwd) ? { cwd: str(p.cwd) } : {}) } : { ...(str(p.grantRoot) ? { grantRoot: str(p.grantRoot) } : {}) },
+        canAlwaysAllow: true,
+      },
+      (a) => {
+        const decision = v2 ? (a.allow ? (a.always ? "acceptForSession" : "accept") : "decline") : a.allow ? (a.always ? "approved_for_session" : "approved") : "denied";
+        write({ id: m.id, result: { decision } });
+      },
+    );
   }
 
   function notify(method: string, p: Record<string, unknown>) {

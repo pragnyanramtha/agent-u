@@ -9,7 +9,9 @@ import { NewSession } from "./NewSession";
 import { SessionList, SessionRail } from "./SessionList";
 import { SessionScreen } from "./SessionScreen";
 import { describeTab, TabBar, TabSheet, TabsButton } from "./TabBar";
-import { AGENTS_TAB, FILES_TAB, NEW_TAB, useTabs, VIEW_TABS } from "./useTabs";
+import { AGENTS_TAB, FILES_TAB, INBOX_TAB, NEW_TAB, useTabs, VIEW_TABS } from "./useTabs";
+import { InboxScreen, inboxCount } from "./InboxScreen";
+import { useFinished } from "@/lib/client/useFinished";
 import { AgentsScreen } from "./AgentsScreen";
 import { FilesScreen, OPEN_FILES_EVENT } from "./FilesScreen";
 import { OfflineBanner } from "./OfflineBanner";
@@ -68,6 +70,8 @@ export function App() {
   }, [sessions, byId, syncTitles]);
   const infos = useMemo(() => openTabs.map((t) => describeTab(t, byId.get(t.id), sessions !== null)), [openTabs, byId, sessions]);
   const sessionId = active && active !== NEW_TAB && !VIEW_TABS[active] ? active : null;
+  const { finished, dismiss } = useFinished(sessions, sessionId);
+  const inbox = inboxCount(sessions, finished);
 
   useEffect(() => {
     if (active === NEW_TAB) setBaseTitle("New session · agent-u");
@@ -214,7 +218,7 @@ export function App() {
   const dismissSheet = useCallback(() => setSheet(false), []);
   const closeDrawer = useCallback(() => setDrawer(false), []);
   const list = (onCollapse: () => void) => (
-    <SessionList key={themeKey} sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onCollapse={onCollapse} error={error} onView={openView} activeView={active} />
+    <SessionList key={themeKey} sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onCollapse={onCollapse} error={error} onView={openView} activeView={active} inbox={inbox} />
   );
   const tabsButton = (
     <TabsButton count={infos.length} attention={infos.some((t) => t.needsYou && t.id !== active)} onClick={() => setSheet(true)} />
@@ -233,7 +237,7 @@ export function App() {
           <div className="h-full w-[260px]">{list(sidebar.toggle)}</div>
         </div>
         <div className="shell-face absolute inset-y-0 left-0 w-[52px]" data-hidden={!sidebar.collapsed || undefined} inert={!sidebar.collapsed}>
-          <SessionRail sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onExpand={sidebar.toggle} onView={openView} />
+          <SessionRail sessions={sessions} activeId={sessionId} onPick={openSession} onNew={newTab} onExpand={sidebar.toggle} onView={openView} inbox={inbox} />
         </div>
       </aside>
 
@@ -292,6 +296,8 @@ export function App() {
         <div id="session-panel" role="tabpanel" aria-labelledby={activeIndex >= 0 ? `tab-${activeIndex}` : undefined} className="flex min-h-0 flex-1 flex-col">
           {!ready ? null : active === FILES_TAB ? (
             <FilesScreen onMenu={() => setDrawer(true)} extra={tabsButton} start={filesStart.path} startKey={filesStart.n} />
+          ) : active === INBOX_TAB ? (
+            <InboxScreen sessions={sessions} finished={finished} onDismiss={dismiss} onOpen={openSession} onRefresh={() => void refresh()} onMenu={() => setDrawer(true)} extra={tabsButton} />
           ) : active === AGENTS_TAB ? (
             <AgentsScreen onMenu={() => setDrawer(true)} extra={tabsButton} onOpenSession={openSession} projects={projects} />
           ) : sessionId ? (

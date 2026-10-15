@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { StreamDelta } from "@/lib/types";
+import type { PendingAsk, StreamDelta } from "@/lib/types";
 import { activeProfile } from "../profiles";
 import type { CliRunState } from "./types";
 
@@ -25,7 +25,11 @@ export type Run = {
   key: string;
   /** live deltas of this turn, accumulated per stream ("<msgId>\0<index>") */
   deltas: Map<string, StreamDelta>;
+  /** answers to the approvals in state.pending, by request id */
+  asks: Map<string, (a: Answer) => void>;
 };
+
+export type Answer = { allow: boolean; always: boolean };
 
 const runs: Map<string, Run> = (() => {
   const g = globalThis as typeof globalThis & { __cliRuns?: Map<string, Run> };
@@ -84,6 +88,7 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
     listeners: existing?.listeners ?? new Set(),
     key,
     deltas: new Map(),
+    asks: new Map(),
   };
   runs.set(key, run);
   const emit = () => run.listeners.forEach((fn) => fn(run.state));
@@ -110,7 +115,8 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
     run.stderr = (run.stderr + chunk.toString("utf8")).slice(-4000);
   });
   child.on("error", (err) => {
-    run.state = { ...run.state, status: "error", error: err.message };
+    run.asks.clear();
+    run.state = { ...run.state, status: "error", error: err.message, pending: [] };
     run.deltas.clear();
     emit();
   });
@@ -132,10 +138,11 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
     if (buf.trim()) onStdout?.(buf.trim());
     buf = "";
     if (run.state.status !== "running") return;
+    run.asks.clear();
     run.state =
       code === 0 || signal === "SIGTERM" || signal === "SIGKILL"
-        ? { ...run.state, status: "idle" }
-        : { ...run.state, status: "error", error: lastLine(run.stderr) || `Exited with code ${code}` };
+        ? { ...run.state, status: "idle", pending: [] }
+        : { ...run.state, status: "error", error: lastLine(run.stderr) || `Exited with code ${code}`, pending: [] };
     run.deltas.clear();
     emit();
   };
@@ -146,6 +153,25 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
 const lastLine = (s: string) => s.trim().split("\n").filter(Boolean).slice(-1)[0]?.slice(0, 300) ?? "";
 
 export const turnState = (key: string) => runs.get(key)?.state ?? null;
+
+/** The agent asks before acting: the approval shows in the session (and the inbox) until it's answered or the turn ends. */
+export function askUser(run: Run, ask: PendingAsk, onAnswer: (a: Answer) => void) {
+  run.asks.set(ask.requestId, onAnswer);
+  run.state = { ...run.state, pending: [...(run.state.pending ?? []), ask] };
+  run.listeners.forEach((fn) => fn(run.state));
+}
+
+/** false when nothing with that id is waiting (answered already, or the turn ended) */
+export function answerTurn(key: string, requestId: string, a: Answer): boolean {
+  const run = runs.get(key);
+  const fn = run?.asks.get(requestId);
+  if (!run || !fn) return false;
+  run.asks.delete(requestId);
+  run.state = { ...run.state, pending: (run.state.pending ?? []).filter((p) => p.requestId !== requestId) };
+  run.listeners.forEach((l) => l(run.state));
+  fn(a);
+  return true;
+}
 /** keys of turns still running */
 export const runningTurns = () => [...runs].filter(([, r]) => r.state.status === "running").map(([k]) => k);
 
@@ -198,6 +224,7 @@ export function onTurn(key: string, fn: (s: CliRunState) => void) {
       listeners: new Set(),
       key,
       deltas: new Map(),
+      asks: new Map(),
     };
     runs.set(key, run);
   }

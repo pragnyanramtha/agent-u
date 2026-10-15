@@ -90,7 +90,8 @@ Requirements on the server: Node 22+ (24 recommended), pnpm, python3 (web termin
   `lib/server/agents/routes.ts`. Codex turns use `codex app-server` (JSON-RPC, streams; `CODEX_WEB_DRIVER=exec` falls back
   to `codex exec --json`); OpenCode turns start a private `opencode serve` and `opencode run --attach` (its `/event` stream
   gives deltas); Cursor uses `cursor-agent -p --output-format stream-json --stream-partial-output`; Devin streams stdout of
-  `devin -p`. Other agents default to Bypass in the UI (their print modes can't show approval prompts yet).
+  `devin -p`. Codex approvals (Ask first, Accept edits) come from the app server and show as cards (`askUser` /
+ `answerTurn` in `cli-run.ts`); the other agents' print modes can't ask, so they default to Bypass in the UI.
 - Markdown: `components/claude/Markdown.tsx` renders with Streamdown (lazy-loaded; KaTeX only when a message has math;
   raw HTML is never rendered; code blocks use CodeCard). Live text uses the same renderer in streaming mode.
 - Shell: harness-style tabs (`components/claude/useTabs.ts`, `TabBar.tsx`); only the active tab's session is mounted.
@@ -112,4 +113,12 @@ Requirements on the server: Node 22+ (24 recommended), pnpm, python3 (web termin
 - Files: `/api/files` (list, read, mkdir, rename, delete, write), `/api/files/raw` (Range downloads; served with a sandbox
   CSP so HTML artifacts can't reach the app), `/api/files/upload` (8 MB resumable chunks; excluded from the middleware
   matcher because middleware buffers bodies, so it calls `guard()` itself).
+- Notifications: `lib/server/notify.ts` watches session states and sends Web Push (`lib/server/push.ts`, keys and
+ subscriptions in `~/.config/agent-u/push.json`); `public/sw.js` shows them. The Inbox view lists approvals (answerable
+ inline), failures and turns that finished while you were elsewhere.
+- Attachments: uploaded to `~/.cache/agent-u/attachments/<day>-<id>/` and named by path at the end of the message
+ (`lib/attachments.ts`), so every agent and terminal can open them; the thread renders them as thumbnails.
+- Git (`lib/server/git.ts`): a checkpoint of the working tree before each web message (hidden refs under
+ `refs/agent-u/cp/`, via a temporary index: HEAD, branch and staging area untouched), rewind with undo, commit/push/PR
+ (gh), and optional worktree per new session (`~/.local/share/agent-u/worktrees`).
 - UI copy: no em dashes; loading labels end with an ellipsis.

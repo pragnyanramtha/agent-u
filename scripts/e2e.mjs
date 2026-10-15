@@ -333,6 +333,27 @@ await check("git: a session can start in its own worktree", async () => {
   gitIn("worktree", "remove", "--force", r.body.worktree.dir);
 });
 
+/* ── inbox: an approval shows in the list and is answered from it ── */
+
+if (process.env.E2E_CLAUDE !== "0") {
+  await check("inbox: a Claude approval shows in the session list and Allow from there runs it", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentu-e2e-inbox-"));
+    const r = await post("/api/sessions", { cwd: dir, model: process.env.E2E_CLAUDE_MODEL || "claude-haiku-5-5", permissionMode: "default", text: "Use the Bash tool to run exactly: echo INBOXOK > inbox.txt. Then reply DONE.", clientId: cid("inbox") });
+    assert(r.status === 200 && r.body.id, `start: ${r.status} ${JSON.stringify(r.body)}`);
+    const row = await until("the approval in the list", async () => {
+      const l = await get("/api/sessions");
+      const s = (l.body.sessions ?? []).find((x) => x.id === r.body.id);
+      return s?.web?.pending?.length ? s : null;
+    }, 120_000);
+    const ask = row.web.pending[0];
+    assert(ask.kind === "permission" && /bash/i.test(ask.toolName), `ask: ${JSON.stringify(ask)}`);
+    const a = await post(`/api/sessions/${enc(r.body.id)}/respond`, { requestId: ask.requestId, allow: true });
+    assert(a.status === 200, `respond: ${a.status}`);
+    await until("inbox.txt", async () => fs.existsSync(path.join(dir, "inbox.txt")), 120_000);
+    await post(`/api/sessions/${enc(r.body.id)}/control`, { action: "stop" }).catch(() => undefined);
+  });
+}
+
 /* ── web terminal backend ─────────────────────────────── */
 
 function ws(query) {

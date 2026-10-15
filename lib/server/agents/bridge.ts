@@ -7,7 +7,7 @@ import type { AgentAdapter, CliRunState } from "./types";
 
 /* Glue between the agent adapters and the routes/UI types. */
 
-/** The web-driven turn of a CLI agent as the UI's RunState (no approvals: CLI print modes can't prompt). */
+/** The web-driven turn of a CLI agent as the UI's RunState (approvals only where the driver can ask). */
 export function toRunState(key: string, s: CliRunState | null, mode: PermissionMode = "default", model: string | null = null): RunState | null {
   /* a finished turn isn't a live session; only a running one (or one that just failed) is */
   if (!s || (s.status !== "running" && !s.error)) return null;
@@ -16,7 +16,7 @@ export function toRunState(key: string, s: CliRunState | null, mode: PermissionM
     model,
     permissionMode: mode,
     slashCommands: [],
-    pending: [],
+    pending: s.pending ?? [],
     error: s.error,
     costUsd: null,
     sessionId: key,

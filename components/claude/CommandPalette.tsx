@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChatBubble, EditPencil, Folder, HalfMoon, LogOut, Search, SidebarCollapse, SunLight, Terminal, Xmark } from "iconoir-react";
+import { ChatBubble, EditPencil, Folder, HalfMoon, LogOut, MailIn, Search, SidebarCollapse, SunLight, Terminal, Xmark } from "iconoir-react";
 import type { SessionSummary } from "@/lib/types";
 import { api, shortPath, timeAgo } from "@/lib/client/api";
 import { Pulse } from "./Pulse";
@@ -76,7 +76,7 @@ export function CommandPalette({
   onOpen: (id: string) => void;
   onNew: () => void;
   /** opens the Agents or Files screen */
-  onView?: (tab: "@agents" | "@files") => void;
+  onView?: (tab: "@agents" | "@files" | "@inbox") => void;
   /** called after the theme flips, so other theme controls can resync */
   onTheme?: (dark: boolean) => void;
 }) {
@@ -228,6 +228,17 @@ export function CommandPalette({
       },
       ...(onView
         ? [
+            {
+              id: "a:inbox",
+              group: "Actions" as const,
+              label: "Inbox",
+              keywords: "inbox waiting approvals needs you failed finished notifications",
+              icon: <MailIn width={15} height={15} strokeWidth={1.8} />,
+              run: () => {
+                navigated.current = true;
+                onView("@inbox");
+              },
+            },
             {
               id: "a:agents",
               group: "Actions" as const,

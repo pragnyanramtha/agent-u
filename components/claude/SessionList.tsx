@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, EditPencil, Folder, LogOut, MoreHoriz, NavArrowRight, Search, SidebarCollapse, SidebarExpand, Terminal, Xmark } from "iconoir-react";
+import { Check, EditPencil, Folder, LogOut, MailIn, MoreHoriz, NavArrowRight, Search, SidebarCollapse, SidebarExpand, Terminal, Xmark } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type SessionSummary } from "@/lib/types";
 import { api, shortPath, timeAgo } from "@/lib/client/api";
 import { terminalBusy } from "@/lib/status";
@@ -382,6 +382,7 @@ export function SessionList({
   error,
   onView,
   activeView,
+  inbox = 0,
 }: {
   sessions: SessionSummary[] | null;
   activeId: string | null;
@@ -394,8 +395,10 @@ export function SessionList({
   collapseLabel?: string;
   error: string | null;
   /** opens the Agents or Files tab */
-  onView?: (tab: "@agents" | "@files") => void;
+  onView?: (tab: "@agents" | "@files" | "@inbox") => void;
   activeView?: string | null;
+  /** approvals, failures and finished turns waiting in the inbox */
+  inbox?: number;
 }) {
   const mod = useModKey();
   const [query, setQuery] = useState("");
@@ -490,6 +493,11 @@ export function SessionList({
         </button>
         {onView && (
           <>
+            <button type="button" onClick={() => onView("@inbox")} aria-current={activeView === "@inbox" ? "page" : undefined} className="side-row">
+              <MailIn width={17} height={17} strokeWidth={1.8} className="shrink-0 text-ink-2" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">Inbox</span>
+              {inbox > 0 && <span className="shrink-0 rounded-full bg-orange-tint px-1.5 text-[11.5px] font-medium text-orange-ink tabular-nums">{inbox}</span>}
+            </button>
             <button type="button" onClick={() => onView("@agents")} aria-current={activeView === "@agents" ? "page" : undefined} className="side-row">
               <Terminal width={17} height={17} strokeWidth={1.8} className="shrink-0 text-ink-2" aria-hidden />
               <span className="min-w-0 flex-1 truncate">Agents and terminals</span>
@@ -722,13 +730,15 @@ export function SessionRail({
   onNew,
   onExpand,
   onView,
+  inbox = 0,
 }: {
   sessions: SessionSummary[] | null;
   activeId: string | null;
   onPick: (id: string) => void;
   onNew: () => void;
   onExpand: () => void;
-  onView?: (tab: "@agents" | "@files") => void;
+  onView?: (tab: "@agents" | "@files" | "@inbox") => void;
+  inbox?: number;
 }) {
   const mod = useModKey();
   const live = (sessions ?? []).filter(isLive);
@@ -752,6 +762,10 @@ export function SessionRail({
         </IconButton>
         {onView && (
           <>
+            <IconButton label={inbox ? `Inbox, ${inbox} waiting` : "Inbox"} tip="Inbox" tipPos="right" onClick={() => onView("@inbox")} className="relative">
+              <MailIn width={18} height={18} strokeWidth={1.8} aria-hidden />
+              {inbox > 0 && <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-orange ring-2 ring-sidebar" aria-hidden />}
+            </IconButton>
             <IconButton label="Agents and terminals" tip="Agents and terminals" tipPos="right" onClick={() => onView("@agents")}>
               <Terminal width={18} height={18} strokeWidth={1.8} aria-hidden />
             </IconButton>

@@ -1,4 +1,4 @@
-import type { AgentId, Entry, PermissionMode } from "@/lib/types";
+import type { AgentId, Entry, PendingAsk, PermissionMode } from "@/lib/types";
 import type { Source } from "../handoff-shape";
 
 export type { AgentId };
@@ -28,6 +28,8 @@ export type CliRunState = {
   status: "running" | "idle" | "error";
   error: string | null;
   startedAt: number;
+  /** approvals the agent is waiting on (drivers that can ask: Codex's app server) */
+  pending?: PendingAsk[];
 };
 
 export type StartOptions = { cwd: string; text: string; model?: string; mode: PermissionMode };

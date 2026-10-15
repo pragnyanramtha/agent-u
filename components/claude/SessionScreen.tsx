@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, Folder, GitBranch, GitCompare, Menu, MoreHoriz, StatsReport, Terminal, Xmark } from "iconoir-react";
-import { AGENT_LABEL, type AgentId, type PermissionMode, type ServerTerminal } from "@/lib/types";
+import { AGENT_LABEL, type AgentId, type Entry, type PermissionMode, type ServerTerminal } from "@/lib/types";
 import { AGENT_TONE, AgentMark } from "./SessionList";
 import { OPEN_TERMINAL_EVENT } from "./CommandPalette";
 import { api, ApiError, shortPath } from "@/lib/client/api";
@@ -42,6 +42,12 @@ function useMeasure<T extends HTMLElement>() {
 }
 
 const OFFLINE = "Couldn't reach the server.";
+
+/** the kind of the last thing said in the thread (usage and notices aside) */
+function lastSaid(entries: Entry[]) {
+  for (let i = entries.length - 1; i >= 0; i--) if (entries[i].kind !== "usage" && entries[i].kind !== "notice") return entries[i].kind;
+  return null;
+}
 
 export function SessionScreen({
   id,
@@ -88,7 +94,7 @@ export function SessionScreen({
   const live = run && run.status !== "error" ? run : null;
   const terminal = view.terminal;
   const busy = run ? run.status === "running" || run.status === "starting" : terminalBusy(terminal?.status);
-  /* other agents' print modes can't ask for approval on the web, so like new sessions they default to Bypass */
+  /* most other agents' print modes can't ask for approval on the web (Codex can), so like new sessions they default to Bypass */
   const mode = live?.permissionMode ?? localMode ?? run?.permissionMode ?? view.permissionMode ?? (agent === "claude" ? "default" : "bypassPermissions");
   const model = localModel ?? run?.model ?? null;
   const where = terminal ? (terminal.headless ? "another program" : (terminal.multiplexer ?? "a terminal")) : null;
@@ -136,6 +142,12 @@ export function SessionScreen({
 
   /* a failed run stays on screen (with Retry and Continue in) until dismissed or the next turn starts */
   const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const planReady =
+    mode === "plan" &&
+    !busy &&
+    !run?.pending.length &&
+    !view.pending.length &&
+    lastSaid(view.entries) === "text";
   const failed = run?.status === "error" && run.error && run.error !== dismissedError ? run.error : null;
   const lastUserText = useMemo(() => {
     for (let i = view.entries.length - 1; i >= 0; i--) {
@@ -151,6 +163,9 @@ export function SessionScreen({
 
   const pendingRef = useRef(view.pending);
   pendingRef.current = view.pending;
+  /* read at send time, so a mode switched right before a send goes with it */
+  const localModeRef = useRef(localMode);
+  localModeRef.current = localMode;
   /* the bubble stays until the message shows up in the transcript; failures stay visible with Retry.
    * A retry reuses the id the server last saw, so it can't send twice, unless that id was spent on a send that never ran (`fresh`) */
   const deliver = useCallback(
@@ -160,7 +175,7 @@ export function SessionScreen({
       try {
         const res = await postReliably<{ id: string; via?: "terminal" | "web" | "queued"; cleared?: string | null }>(
           `/api/sessions/${id}/message`,
-          { text, model: localModel ?? undefined, permissionMode: localMode ?? undefined, profile: localProfile ?? undefined },
+          { text, model: localModel ?? undefined, permissionMode: localModeRef.current ?? undefined, profile: localProfile ?? undefined },
           clientId,
         );
         updatePending(localId, { state: "sent", via: res.via, at: Date.now() });
@@ -584,6 +599,24 @@ export function SessionScreen({
                     <Xmark width={15} height={15} strokeWidth={1.8} />
                   </button>
                 </div>
+              </div>
+            )}
+            {planReady && (
+              <div className="mb-2 flex items-center gap-2 rounded-[12px] bg-accent-tint px-3 py-2 text-[13px] text-accent-ink" style={{ animation: "fade-up 240ms cubic-bezier(0.23,1,0.32,1) both" }}>
+                <p className="min-w-0 flex-1">{agentName} is in plan mode and hasn&apos;t changed anything.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next: PermissionMode = agent === "claude" || agent === "codex" ? "acceptEdits" : "bypassPermissions";
+                    localModeRef.current = next;
+                    setLocalMode(next);
+                    if (live) void control("mode", next);
+                    void send("Go ahead and implement the plan.");
+                  }}
+                  className="tap relative h-8 shrink-0 rounded-full bg-ink px-3 text-[12.5px] font-medium text-surface"
+                >
+                  Implement this plan
+                </button>
               </div>
             )}
             {error && (
