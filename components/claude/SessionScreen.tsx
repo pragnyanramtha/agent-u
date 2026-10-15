@@ -9,7 +9,7 @@ import { api, ApiError, shortPath } from "@/lib/client/api";
 import { useSession } from "@/lib/client/useSession";
 import { postReliably } from "@/lib/client/send";
 import { openServerTerminal } from "@/lib/client/terminals";
-import { profileModels, useProfiles } from "@/lib/client/useProfiles";
+import { profileModels, useAgentModels, useProfiles } from "@/lib/client/useProfiles";
 import { HandoffDialog } from "./HandoffDialog";
 import { OPEN_FILES_EVENT } from "./FilesScreen";
 import { terminalBusy } from "@/lib/status";
@@ -88,6 +88,7 @@ export function SessionScreen({
   const agentName = AGENT_LABEL[agent];
   const profileId = localProfile ?? view.profile ?? agent;
   const profileInfo = profiles?.find((p) => p.id === profileId);
+  const agentModels = useAgentModels(agent, profileId);
   const runsOn = profileInfo && profileInfo.id !== agent ? profileInfo.label : agent !== "claude" ? agentName : null;
   const changes = useMemo(() => collectChanges(view.entries, view.results), [view.entries, view.results]);
   const cost = useMemo(() => sessionCost(view.entries, view.run), [view.entries, view.run]);
@@ -533,7 +534,7 @@ export function SessionScreen({
               }}
               autoFocus
               cwd={agent === "claude" ? view.cwd || undefined : undefined}
-              models={profileModels(profileInfo, agent === "claude" ? MODELS : [{ key: "", name: "Default" }])}
+              models={profileModels(profileInfo, agent === "claude" ? MODELS : agentModels)}
               profiles={profiles ?? undefined}
               profile={profileId}
               onProfileChange={(p) => {

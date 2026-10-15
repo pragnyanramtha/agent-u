@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { ArrowUp, Check, Folder, NavArrowDown, Plus, ShieldAlert, ShieldCheck } from "iconoir-react";
 import { APP_COMMANDS, rankCommands, type SlashItem } from "@/lib/commands";
 import { ContextRing, type ContextUsage } from "./ContextRing";
+import { promptAsk } from "./Ask";
 import type { SessionCost } from "@/lib/client/usage";
 import { shortPath } from "@/lib/client/api";
 import { AGENT_LABEL, type AgentId, type PermissionMode, type ProfileInfo } from "@/lib/types";
@@ -350,12 +351,13 @@ export function Composer({
   const pickable = agents && onAgentChange;
   const agentLabel = agents?.find((a) => a.id === agent)?.label ?? AGENT_LABEL[agent];
   /* new sessions name the agent ("Claude · Opus", "Codex"); replies only the model */
-  const pickLabel = pickable ? (agent === "claude" && model ? `${agentLabel} · ${modelLabel(model)}` : agentLabel) : modelLabel(model);
+  const modelName = (m: string | null) => (m && models.find((x) => x.key === m)?.name) || modelLabel(m);
+  const pickLabel = pickable ? (model ? `${agentLabel} · ${modelName(model)}` : agentLabel) : modelName(model);
   const modelOn = (key: string, list: { key: string }[]) => key === (model && list.some((x) => x.key === model) ? model : "");
   const busy = sending && busyLabel;
   const profileChoices = onProfileChange ? (profiles ?? []).filter((p) => p.agent === agent && !p.hidden) : [];
   const profileOn = profileChoices.find((p) => p.id === profile);
-  const pickText = profileOn && profileChoices.length > 1 && profileOn.id !== agent ? `${profileOn.label}${model ? ` · ${modelLabel(model)}` : ""}` : pickLabel;
+  const pickText = profileOn && profileChoices.length > 1 && profileOn.id !== agent ? `${profileOn.label}${model ? ` · ${modelName(model)}` : ""}` : pickLabel;
 
   const modelRow = (m: { key: string; name: string }, list: { key: string }[], on: boolean, onPick: () => void) => (
     <button
@@ -367,10 +369,26 @@ export function Composer({
       className={menuRow}
     >
       <span className="min-w-0 truncate">{m.name}</span>
-      {m.key === "" && model && !list.some((x) => x.key === model) && <span className="truncate text-[12px] text-ink-3">{modelLabel(model)}</span>}
+      {m.key === "" && model && !list.some((x) => x.key === model) && <span className="truncate text-[12px] text-ink-3">{modelName(model)}</span>}
       {on && <Check width={15} height={15} strokeWidth={2.2} className="ml-auto shrink-0 text-ink" aria-hidden />}
     </button>
   );
+
+  /* CLI agents accept model ids their list may not show (new releases, other providers) */
+  const otherModelRow =
+    agent !== "claude" ? (
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          closeMenu(true);
+          void promptAsk({ title: `${agentLabel} model`, body: "Any model id the CLI accepts.", confirm: "Use model", value: model ?? "" }).then((m) => m && onModelChange(m));
+        }}
+        className={`${menuRow} text-ink-2`}
+      >
+        <span>Other model…</span>
+      </button>
+    ) : null;
 
   return (
     <div ref={rootRef} className="relative w-full" data-composer>
@@ -499,6 +517,18 @@ export function Composer({
                       ))}
                   </div>
                 )}
+                {agent !== "claude" && (
+                  <div role="group" aria-label={`${agentLabel} model`}>
+                    <MenuLabel>{`${agentLabel} model`}</MenuLabel>
+                    {models.map((m) =>
+                      modelRow(m, models, modelOn(m.key, models), () => {
+                        onModelChange(m.key);
+                        closeMenu(true);
+                      }),
+                    )}
+                    {otherModelRow}
+                  </div>
+                )}
               </>
             ) : (
               <div role="group" aria-label="Model">
@@ -509,6 +539,7 @@ export function Composer({
                     closeMenu(true);
                   }),
                 )}
+                {otherModelRow}
               </div>
             )}
             {profileChoices.length > 1 && (

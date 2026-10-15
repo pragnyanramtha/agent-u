@@ -47,3 +47,30 @@ export function profileModels(p: ProfileInfo | undefined, fallback: { key: strin
 }
 
 export const profilesFor = (all: ProfileInfo[] | null, agent: AgentId) => (all ?? []).filter((p) => p.agent === agent && !p.hidden);
+
+const modelCache = new Map<string, Promise<{ key: string; name: string }[]>>();
+
+/** The models a non-Claude agent's CLI offers (under a profile), with "Default" first; just "Default" while loading. */
+export function useAgentModels(agent: AgentId, profile: string | null | undefined) {
+  const key = `${agent}:${profile ?? ""}`;
+  const [list, setList] = useState<{ key: string; models: { key: string; name: string }[] } | null>(null);
+  useEffect(() => {
+    if (agent === "claude") return;
+    let live = true;
+    let p = modelCache.get(key);
+    if (!p) {
+      p = api<{ models: { key: string; name: string }[] }>(`/api/agents/models?agent=${agent}${profile ? `&profile=${encodeURIComponent(profile)}` : ""}`).then(
+        (d) => d.models,
+        () => [],
+      );
+      modelCache.set(key, p);
+      /* an empty answer (CLI logged out or slow) is asked again next time */
+      void p.then((m) => !m.length && modelCache.get(key) === p && modelCache.delete(key));
+    }
+    void p.then((models) => live && setList({ key, models }));
+    return () => {
+      live = false;
+    };
+  }, [agent, profile, key]);
+  return [{ key: "", name: "Default" }, ...(list?.key === key ? list.models : [])];
+}

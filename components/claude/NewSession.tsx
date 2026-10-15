@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { Clock, Menu } from "iconoir-react";
 import { AGENT_LABEL, type AgentId, type PermissionMode, type SessionSummary } from "@/lib/types";
 import { api, ApiError, timeAgo } from "@/lib/client/api";
-import { profileModels, profilesFor, useProfiles } from "@/lib/client/useProfiles";
+import { profileModels, useAgentModels, profilesFor, useProfiles } from "@/lib/client/useProfiles";
 import { newClientId } from "@/lib/client/send";
 import { openServerTerminal } from "@/lib/client/terminals";
 import { Composer, MODELS, type AgentOption } from "./Composer";
@@ -82,6 +82,7 @@ export function NewSession({
     localStorage.setItem(`cui:newProfile:${agent}`, id);
   };
   const profileInfo = profiles?.find((p) => p.id === profile);
+  const agentModels = useAgentModels(agent, profile);
 
   const pickAgent = (a: AgentId) => {
     setAgent(a);
@@ -198,7 +199,7 @@ export function NewSession({
               onModeChange={setMode}
               model={model || null}
               onModelChange={setModel}
-              models={profileModels(profileInfo, agent === "claude" ? MODELS : [{ key: "", name: "Default" }])}
+              models={profileModels(profileInfo, agent === "claude" ? MODELS : agentModels)}
               cwd={agent === "claude" ? cwd.trim() || undefined : undefined}
               profiles={profiles ?? undefined}
               profile={profile}
