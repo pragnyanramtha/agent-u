@@ -8,6 +8,10 @@ import { readJson, sessionContext, str } from "@/lib/server/http";
 import { getProfile, pickProfile } from "@/lib/server/profiles";
 import { getRun } from "@/lib/server/runner";
 import { killTerminal, launchAgent, listTerminals } from "@/lib/server/terminals";
+import { terminalForKey } from "@/lib/server/agents/bridge";
+
+/* a double tap (or two devices) must not start two TUIs on one session */
+const launching = new Map<string, Promise<Response>>();
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +31,20 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const body = await readJson(req);
   const raw = str(body.session);
+  const lockKey = raw ? `s:${raw}` : null;
+  if (!lockKey) return launch(body, raw);
+  const busy = launching.get(lockKey);
+  if (busy) return (await busy).clone();
+  const p = launch(body, raw);
+  launching.set(lockKey, p);
+  try {
+    return await p;
+  } finally {
+    launching.delete(lockKey);
+  }
+}
+
+async function launch(body: Record<string, unknown>, raw: string | undefined): Promise<Response> {
   let cwd = str(body.cwd)?.trim() ?? "";
   let profile = getProfile(str(body.profile));
   let native: string | null = null;
@@ -36,9 +54,11 @@ export async function POST(req: NextRequest) {
     if (!k) return NextResponse.json({ error: "Session not found" }, { status: 404 });
     key = sessionKey(k.agent, k.native);
     native = k.native;
+    /* already open somewhere: rejoin that instead of resuming a second copy */
+    const kept = (await listTerminals().catch(() => null))?.terminals.find((t) => t.session === key && t.exited === null);
+    if (kept) return NextResponse.json({ ...kept, label: kept.label });
     if (k.agent === "claude") {
       if (getRun(k.native)?.state.status === "running") return NextResponse.json({ error: "Claude is working on a message from the web. Open the terminal once it's done.", code: "busy" }, { status: 409 });
-      getRun(k.native)?.close();
       cwd = (await sessionContext(k.native))?.cwd ?? cwd;
     } else {
       const a = await adapterFor(k.agent);
@@ -46,12 +66,21 @@ export async function POST(req: NextRequest) {
       cwd = (await a?.get(k.native))?.cwd ?? cwd;
     }
     profile = pickProfile(k.agent, str(body.profile), key);
+    const live = await terminalForKey(key);
+    if (live) {
+      return NextResponse.json(
+        { error: live.multiplexer ? `This session is already open in ${live.multiplexer}. Open that instead.` : "This session is already running in another terminal or program. Continue it there.", code: "live_terminal" },
+        { status: 409 },
+      );
+    }
   }
   if (!profile) return NextResponse.json({ error: "Pick an agent profile." }, { status: 400 });
   if (cwd === "~" || cwd.startsWith("~/")) cwd = path.join(os.homedir(), cwd.slice(1));
   if (!cwd || !path.isAbsolute(cwd) || !(await fs.stat(cwd).then((s) => s.isDirectory()).catch(() => false))) {
     return NextResponse.json({ error: `No folder at ${cwd || "(empty)"} on the server.` }, { status: 400 });
   }
+  /* the idle web run hands the session over only once the launch can actually happen */
+  if (key && native && parseSessionKey(key)?.agent === "claude") getRun(native)?.close();
   try {
     const t = await launchAgent({ profile, cwd, session: native, sessionKey: key, model: str(body.model) || null, cols: Number(body.cols) || undefined, rows: Number(body.rows) || undefined });
     return NextResponse.json({ ...t, label: profile.label });

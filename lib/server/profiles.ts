@@ -211,7 +211,8 @@ export function saveProfiles(list: unknown[]): { ok: true } | { error: string } 
     if (typeof p === "string") return { error: p };
     if (seen.has(p.id)) return { error: `Two profiles are called ${p.id}.` };
     seen.add(p.id);
-    if (p.env) for (const [k, v] of Object.entries(p.env)) if (v === MASK) p.env[k] = old.get(p.id)?.env?.[k] ?? "";
+    const prev = raw && typeof raw === "object" && typeof (raw as { previousId?: unknown }).previousId === "string" ? (raw as { previousId: string }).previousId : p.id;
+    if (p.env) for (const [k, v] of Object.entries(p.env)) if (v === MASK) p.env[k] = old.get(prev)?.env?.[k] ?? old.get(p.id)?.env?.[k] ?? "";
     /* keep the file as short as a hand-written one */
     const lean = Object.fromEntries(
       Object.entries(p).filter(([, v]) => v !== undefined && v !== "" && v !== false && !(Array.isArray(v) && !v.length) && !(v && typeof v === "object" && !Array.isArray(v) && !Object.keys(v).length)),

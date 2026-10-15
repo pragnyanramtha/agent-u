@@ -152,6 +152,12 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
       } catch {
         /* DOM renderer */
       }
+      /* closed (or retried) while the renderer loaded */
+      if (disposed) {
+        term.dispose();
+        termRef.current = null;
+        return;
+      }
       fit.fit();
 
       /* connection loop: a kept terminal is re-joined by id from the last byte seen */
@@ -190,7 +196,7 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
         };
         sock.onmessage = (e) => {
           if (typeof e.data === "string") {
-            let msg: { type: string; id?: string; label?: string; kind?: string; persistent?: boolean; code?: number };
+            let msg: { type: string; id?: string; label?: string; kind?: string; persistent?: boolean; code?: number; offset?: number };
             try {
               msg = JSON.parse(e.data);
             } catch {
@@ -200,8 +206,10 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
               if (msg.label) setLabel(msg.label);
               setKind(msg.kind ?? null);
               /* an attach starts over each time; the multiplexer redraws everything */
-              if (msg.persistent && msg.id) kept = msg.id;
-              else term.reset();
+              if (msg.persistent && msg.id) {
+                kept = msg.id;
+                if (typeof msg.offset === "number") received = msg.offset;
+              } else term.reset();
             } else if (msg.type === "reset") term.reset();
             else if (msg.type === "exit") {
               ended = true;
@@ -217,7 +225,11 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
         };
         sock.onclose = (e) => {
           if (ws !== sock || disposed) return;
-          if (ended || e.code === 1000 || (e.code >= 4400 && e.code < 4500)) {
+          if (e.code === 4401) {
+            window.location.href = "/login";
+            return;
+          }
+          if (ended || e.code === 1000 || (e.code >= 4400 && e.code < 4600)) {
             ended = true;
             setConn("ended");
             setReason((r) => r ?? (e.reason || "The terminal closed."));

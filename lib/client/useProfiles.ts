@@ -48,7 +48,8 @@ export function profileModels(p: ProfileInfo | undefined, fallback: { key: strin
 
 export const profilesFor = (all: ProfileInfo[] | null, agent: AgentId) => (all ?? []).filter((p) => p.agent === agent && !p.hidden);
 
-const modelCache = new Map<string, Promise<{ key: string; name: string }[]>>();
+const modelCache = new Map<string, { at: number; list: Promise<{ key: string; name: string }[]> }>();
+const MODELS_TTL = 10 * 60_000;
 
 /** The models a non-Claude agent's CLI offers (under a profile), with "Default" first; just "Default" while loading. */
 export function useAgentModels(agent: AgentId, profile: string | null | undefined) {
@@ -57,15 +58,17 @@ export function useAgentModels(agent: AgentId, profile: string | null | undefine
   useEffect(() => {
     if (agent === "claude") return;
     let live = true;
-    let p = modelCache.get(key);
+    const hit = modelCache.get(key);
+    let p = hit && Date.now() - hit.at < MODELS_TTL ? hit.list : undefined;
     if (!p) {
       p = api<{ models: { key: string; name: string }[] }>(`/api/agents/models?agent=${agent}${profile ? `&profile=${encodeURIComponent(profile)}` : ""}`).then(
         (d) => d.models,
         () => [],
       );
-      modelCache.set(key, p);
+      const list = p;
+      modelCache.set(key, { at: Date.now(), list });
       /* an empty answer (CLI logged out or slow) is asked again next time */
-      void p.then((m) => !m.length && modelCache.get(key) === p && modelCache.delete(key));
+      void list.then((m) => !m.length && modelCache.get(key)?.list === list && modelCache.delete(key));
     }
     void p.then((models) => live && setList({ key, models }));
     return () => {

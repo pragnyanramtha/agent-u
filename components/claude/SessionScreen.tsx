@@ -85,7 +85,7 @@ export function SessionScreen({
   const busy = run ? run.status === "running" || run.status === "starting" : terminalBusy(terminal?.status);
   const mode = live?.permissionMode ?? localMode ?? run?.permissionMode ?? view.permissionMode ?? "default";
   const model = localModel ?? run?.model ?? null;
-  const where = terminal ? terminal.multiplexer ?? "a terminal" : null;
+  const where = terminal ? (terminal.headless ? "another program" : (terminal.multiplexer ?? "a terminal")) : null;
   const agent: AgentId = id.includes(":") ? (id.slice(0, id.indexOf(":")) as AgentId) : "claude";
   const agentName = AGENT_LABEL[agent];
   const profileId = localProfile ?? view.profile ?? agent;
@@ -255,6 +255,15 @@ export function SessionScreen({
       return;
     }
     if (terminal) {
+      /* only zellij and tmux can be joined from here; anything else stays where it runs */
+      if (!/^(zellij|tmux)/.test(terminal.multiplexer ?? "")) {
+        setError(
+          terminal.headless
+            ? "Another program is running this session through the Agent SDK, so there's no terminal to open. It can be continued here once that program ends it."
+            : `This session is running in ${terminal.multiplexer === "screen" ? "GNU screen" : "a plain terminal"}, which the web can't join. Continue it there, or quit it there and open it here.`,
+        );
+        return;
+      }
       window.dispatchEvent(new CustomEvent(OPEN_TERMINAL_EVENT, { detail: { session: agent === "claude" ? id : undefined, pid: terminal.pid, label: `${agentName} in ${where ?? "terminal"}` } }));
       return;
     }
@@ -497,7 +506,7 @@ export function SessionScreen({
               dropPending(p.localId);
               void control("unqueue", p.localId);
             }}
-            onSendNow={() => void control("interrupt")}
+            onSendNow={() => void control("sendQueued", p.localId)}
           />
         )}
         bottomPad={composerH}

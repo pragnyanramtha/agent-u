@@ -28,6 +28,10 @@ const drains: Map<string, () => void> = (g.__agentuDrains ??= new Map());
 const queueEvent = (key: string): ServerEvent => ({ type: "queue", items: (queues.get(key) ?? []).map(({ id, text }) => ({ id, text })) });
 const announce = (key: string) => postToSession(key, queueEvent(key));
 
+/** sessions with a send in flight (the CLI may not report "running" until its process is up) */
+const sending: Set<string> = ((g as { __agentuSending?: Set<string> }).__agentuSending ??= new Set());
+const busy = (a: { runState(n: string): { status: string } | null }, native: string, key: string) => sending.has(key) || a.runState(native)?.status === "running";
+
 function enqueue(agent: AgentId, native: string, item: Queued) {
   const key = sessionKey(agent, native);
   const list = queues.get(key) ?? [];
@@ -37,33 +41,62 @@ function enqueue(agent: AgentId, native: string, item: Queued) {
   if (!drains.has(key)) drains.set(key, onTurn(key, (s) => s.status !== "running" && void drain(agent, native)));
 }
 
+function forget(key: string) {
+  if (queues.get(key)?.length) return;
+  queues.delete(key);
+  drains.get(key)?.();
+  drains.delete(key);
+}
+
+/** Sends the next queued message once nothing runs; one that fails to start is reported and the next one tried. */
 async function drain(agent: AgentId, native: string) {
   const key = sessionKey(agent, native);
-  const a = await adapterFor(agent);
-  const list = queues.get(key) ?? [];
-  if (!a || a.runState(native)?.status === "running") return;
-  const next = list.shift();
-  if (!list.length) {
-    queues.delete(key);
-    drains.get(key)?.();
-    drains.delete(key);
+  if (sending.has(key)) return;
+  sending.add(key);
+  try {
+    const a = await adapterFor(agent);
+    if (!a || a.runState(native)?.status === "running") return;
+    for (;;) {
+      const next = queues.get(key)?.shift();
+      announce(key);
+      if (!next) break;
+      const res = await sendNow(agent, native, next.text, next);
+      if (res.ok) break;
+      postNotice(key, `Couldn't send a queued message ("${next.text.slice(0, 60)}"): ${res.error}`, "warn");
+    }
+  } finally {
+    sending.delete(key);
+    forget(key);
+    void settle(agent, native);
   }
-  announce(key);
-  if (!next) return;
-  const res = await sendNow(agent, native, next.text, next);
-  if (!res.ok) postNotice(key, `Couldn't send a queued message: ${res.error}`, "warn");
+}
+
+/* a turn that ended while a send was in flight left its end-of-turn drain unanswered */
+async function settle(agent: AgentId, native: string) {
+  const key = sessionKey(agent, native);
+  if (!queues.get(key)?.length) return;
+  const a = await adapterFor(agent);
+  if (a && !busy(a, native, key)) void drain(agent, native);
 }
 
 export function unqueue(agent: AgentId, native: string, id: string) {
   const key = sessionKey(agent, native);
-  const list = (queues.get(key) ?? []).filter((q) => q.id !== id);
-  if (list.length) queues.set(key, list);
-  else {
-    queues.delete(key);
-    drains.get(key)?.();
-    drains.delete(key);
-  }
+  queues.set(key, (queues.get(key) ?? []).filter((q) => q.id !== id));
+  forget(key);
   announce(key);
+}
+
+/** Puts one queued message first and stops the running turn, so it goes out next. */
+async function sendQueuedNow(agent: AgentId, native: string, id: string) {
+  const key = sessionKey(agent, native);
+  const list = queues.get(key) ?? [];
+  const i = list.findIndex((q) => q.id === id);
+  if (i > 0) list.unshift(...list.splice(i, 1));
+  announce(key);
+  const a = await adapterFor(agent);
+  if (!a) return;
+  if (a.runState(native)?.status === "running") await a.stop(native);
+  else void drain(agent, native);
 }
 
 async function sendNow(agent: AgentId, native: string, text: string, o: { model?: string; mode: PermissionMode; profile: unknown }): Promise<{ ok: true } | { ok: false; error: string; status: number; code?: string }> {
@@ -74,7 +107,7 @@ async function sendNow(agent: AgentId, native: string, text: string, o: { model?
   const profile = pickProfile(agent, o.profile, key);
   if (!sameStore(before, profile)) return { ok: false, error: `${profile.label} keeps its sessions elsewhere. Use "Continue in" to move this session there.`, status: 409, code: "other_store" };
   try {
-    await withProfile(profile, () => a.send(native, text, { model: o.model, mode: o.mode }));
+    await withProfile(profile, () => a.send(native, text, { model: o.model || profile.defaultModel || profile.models?.[0] || undefined, mode: o.mode }));
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err), status: 502 };
   }
@@ -136,7 +169,8 @@ export async function agentEvents(req: NextRequest, agent: AgentId, native: stri
       };
       const runOf = () => toRunState(key, a.runState(native), modes.get(key) ?? "default", session?.model ?? null);
       send({ type: "history", entries: [], cursor: null, terminal, run: runOf(), title: handoffTitle(session?.title ?? "") || `New ${a.label} session`, cwd: session?.cwd ?? "", permissionMode: modes.get(key) ?? null, profile: pickProfile(agent, null, key).id });
-      if (queues.get(key)?.length) send(queueEvent(key));
+      /* always: a queue lost to a restart must clear what the client still shows */
+      send(queueEvent(key));
       cleanups.push(onSessionEvent(key, (e) => send(e)));
       cleanups.push(a.watch(native, start, (entries, end) => entries.length && send({ type: "entries", entries }, end)));
       cleanups.push(onTurn(key, () => send({ type: "run", run: runOf() })));
@@ -202,17 +236,19 @@ export async function agentMessage(agent: AgentId, native: string, body: Record<
     }
   }
   const model = str(body.model) || undefined;
-  if (a.runState(native)?.status === "running" || queues.get(key)?.length) {
+  if (busy(a, native, key) || queues.get(key)?.length) {
     const before = pickProfile(agent, null, key);
     if (!sameStore(before, pickProfile(agent, body.profile, key))) {
       return NextResponse.json({ error: `That profile keeps its sessions elsewhere. Use "Continue in" to move this session there.`, code: "other_store" }, { status: 409 });
     }
     enqueue(agent, native, { id: str(body.clientId) || `q${Date.now().toString(36)}`, text, model, mode, profile: body.profile });
     /* the turn may have ended while this was queued */
-    if (a.runState(native)?.status !== "running") void drain(agent, native);
+    void settle(agent, native);
     return NextResponse.json({ id: key, via: "queued" });
   }
-  const res = await sendNow(agent, native, text, { model, mode, profile: body.profile });
+  sending.add(key);
+  const res = await sendNow(agent, native, text, { model, mode, profile: body.profile }).finally(() => sending.delete(key));
+  void settle(agent, native);
   if (!res.ok) return NextResponse.json({ error: res.error, code: res.code }, { status: res.status });
   return NextResponse.json({ id: key, via: "web" });
 }
@@ -230,7 +266,7 @@ export async function agentStart(agent: AgentId, body: Record<string, unknown>) 
   }
   const mode = parseMode(body.permissionMode) ?? "default";
   const profile = chosen;
-  const model = str(body.model) || undefined;
+  const model = str(body.model) || profile.defaultModel || profile.models?.[0] || undefined;
   try {
     const { id } = await Promise.race([
       withProfile(profile, () => a.start({ cwd, text, model, mode })),
@@ -252,6 +288,7 @@ export async function agentControl(agent: AgentId, native: string, body: Record<
   const key = sessionKey(agent, native);
   if (body.action === "interrupt" || body.action === "stop") await a.stop(native);
   else if (body.action === "unqueue") unqueue(agent, native, str(body.value) ?? "");
+  else if (body.action === "sendQueued") await sendQueuedNow(agent, native, str(body.value) ?? "");
   else if (body.action === "mode") {
     const mode = parseMode(body.value);
     if (!mode) return NextResponse.json({ error: "Unknown permission mode." }, { status: 400 });

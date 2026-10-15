@@ -71,7 +71,13 @@ const SYSTEMD_RUN = process.env.INVOCATION_ID && which("systemd-run") ? which("s
 function validCookie(header) {
   const raw = /(?:^|;\s*)cui_session=([^;]+)/.exec(header ?? "")?.[1];
   if (!raw) return false;
-  const [expires, sig, extra] = decodeURIComponent(raw).split(".");
+  let value;
+  try {
+    value = decodeURIComponent(raw);
+  } catch {
+    return false;
+  }
+  const [expires, sig, extra] = value.split(".");
   if (!/^\d+$/.test(expires ?? "") || !sig || extra !== undefined || Number(expires) < Date.now()) return false;
   const want = createHmac("sha256", SECRET).update(expires).digest("base64url");
   return want.length === sig.length && timingSafeEqual(Buffer.from(want), Buffer.from(sig));
@@ -104,6 +110,15 @@ const ppidOf = (pid) => {
   }
 };
 
+const procStart = (pid) => {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+  } catch {
+    return null;
+  }
+};
+
 /** Attach command for the zellij/tmux a process runs in (walking up its parents), or null. */
 function attachForPid(start) {
   for (let pid = start, depth = 0; pid > 1 && depth < 6; pid = ppidOf(pid), depth++) {
@@ -111,8 +126,15 @@ function attachForPid(start) {
     if (zellij) return ["zellij", "attach", zellij];
     const pane = envOf(pid, "TMUX_PANE");
     if (pane) {
-      const name = execFileSync("tmux", ["display-message", "-p", "-t", pane, "#S"], { encoding: "utf8" }).trim();
-      return ["tmux", "attach-session", "-t", `=${name}`];
+      /* the pane may live on another tmux server (-L/-S, TMUX_TMPDIR): its socket is the first field of $TMUX */
+      const sock = (envOf(pid, "TMUX") ?? "").split(",")[0];
+      const via = sock ? ["-S", sock] : [];
+      try {
+        const name = execFileSync(TMUX ?? "tmux", [...via, "display-message", "-p", "-t", pane, "#S"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+        return name ? ["tmux", ...via, "attach-session", "-t", `=${name}`] : null;
+      } catch {
+        return null;
+      }
     }
   }
   return null;
@@ -134,7 +156,9 @@ function attachForSession(sessionId) {
     } catch {
       continue;
     }
-    if (info.sessionId !== sessionId || !fs.existsSync(`/proc/${info.pid}`)) continue;
+    if (info.sessionId !== sessionId || !Number.isInteger(info.pid) || !fs.existsSync(`/proc/${info.pid}`)) continue;
+    /* a recycled pid is someone else's process */
+    if (info.procStart && procStart(info.pid) !== String(info.procStart)) continue;
     const cmd = attachForPid(info.pid);
     if (cmd) return cmd;
   }
@@ -215,10 +239,17 @@ function tmuxLaunch({ cmd, args, env, cwd, label, kind, profile, session, cols, 
 /** @type {Map<string, any>} */
 const terms = new Map();
 
+/* started from inside tmux/zellij (dev), attaching would be refused as nesting */
+const NESTING = ["TMUX", "TMUX_PANE", "ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID"];
+const EXTRA_PATH = [".local/bin", ".cargo/bin", ".npm-global/bin", ".local/npm-global/bin", ".bun/bin", ".opencode/bin"].map((d) => path.join(os.homedir(), d));
+
 function bridge(cmd, { cwd, env, cols, rows }) {
+  const base = { ...process.env };
+  for (const k of NESTING) delete base[k];
+  base.PATH = [...new Set([...(base.PATH ?? "").split(":").filter(Boolean), ...EXTRA_PATH, "/usr/local/bin", "/usr/bin", "/bin"])].join(":");
   return spawn("python3", [path.join(here, "pty_bridge.py"), ...cmd], {
     cwd,
-    env: { ...process.env, ...env, TERM: "xterm-256color", COLORTERM: "truecolor", PTY_COLS: String(cols), PTY_ROWS: String(rows) },
+    env: { ...base, ...env, TERM: "xterm-256color", COLORTERM: "truecolor", PTY_COLS: String(cols), PTY_ROWS: String(rows) },
     stdio: ["pipe", "pipe", "ignore", "pipe"],
   });
 }
@@ -343,15 +374,15 @@ function keepAlive(ws) {
 function attachKept(ws, t, since, cols, rows) {
   t.clients.add(ws);
   t.lastSeen = Date.now();
-  sendJson(ws, { type: "hello", id: t.id, kind: t.kind, label: t.label, cwd: t.cwd, backing: "pty", persistent: true });
-  /* replay what this client hasn't seen; a client too far behind starts over from what's kept */
+  /* replay what this client hasn't seen; a client too far behind starts over from what's kept.
+   * `offset` tells the client where the bytes it gets next start, so its next `since` is exact */
   const start = t.seq - t.size;
   let from = Number.isFinite(since) && since >= 0 ? since : 0;
   if (from > t.seq) from = 0;
-  if (from < start) {
-    if (from > 0) sendJson(ws, { type: "reset" });
-    from = start;
-  }
+  const reset = from < start && from > 0;
+  if (from < start) from = start;
+  sendJson(ws, { type: "hello", id: t.id, kind: t.kind, label: t.label, cwd: t.cwd, backing: "pty", persistent: true, offset: from });
+  if (reset) sendJson(ws, { type: "reset" });
   let skip = from - start;
   for (const c of t.chunks) {
     if (skip >= c.length) {
@@ -400,7 +431,7 @@ function attachOnce(ws, cmd, cols, rows, hello) {
     sendJson(ws, { type: "exit", code: code ?? 0 });
     if (ws.readyState === ws.OPEN) ws.close(1000, "exited");
   });
-  child.on("error", () => ws.readyState === ws.OPEN && ws.close(1011, "couldn't start"));
+  child.on("error", (err) => ws.readyState === ws.OPEN && ws.close(4500, `Couldn't start the terminal: ${err.code ?? err.message}`.slice(0, 120)));
   ws.on("message", (raw, isBinary) =>
     onClientMessage(
       ws,
@@ -571,9 +602,17 @@ server.on("upgrade", (req, socket, head) => {
   };
   if (url.pathname !== "/pty") return refuse(404, "Not Found");
   if (!sameOrigin(req)) return refuse(403, "Bad Origin");
-  if (!validCookie(req.headers.cookie)) return refuse(401, "Unauthorized");
-  if (sockets >= MAX_SOCKETS) return refuse(429, "Too Many Terminals");
-  wss.handleUpgrade(req, socket, head, (ws) => start(ws, url));
+  /* past the origin check, refusals go over the socket: a browser only sees a raw HTTP refusal as a network error */
+  const why = !validCookie(req.headers.cookie) ? [4401, "Signed out. Reload the page and log in again."] : sockets >= MAX_SOCKETS ? [4429, "Too many terminals are open. Close one first."] : null;
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    if (why) return ws.close(why[0], why[1]);
+    try {
+      start(ws, url);
+    } catch (err) {
+      console.error("pty start failed:", err);
+      if (ws.readyState === ws.OPEN) ws.close(4500, `The terminal failed to start: ${String(err?.message ?? err)}`.slice(0, 120));
+    }
+  });
 });
 
 const shutdown = () => {
@@ -581,6 +620,8 @@ const shutdown = () => {
   process.exit(0);
 };
 process.on("SIGTERM", shutdown);
+/* one bad request must not take every open shell down with it */
+process.on("uncaughtException", (err) => console.error("pty uncaught:", err));
 process.on("SIGINT", shutdown);
 
 server.listen(PORT, "127.0.0.1", () => console.log(`pty server on 127.0.0.1:${PORT}${TMUX ? " (tmux available)" : ""}`));

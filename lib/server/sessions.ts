@@ -73,12 +73,12 @@ export async function liveTerminals(maxAgeMs = 1500): Promise<Map<string, Termin
       const raw = await fs.readFile(path.join(LIVE_SESSIONS_DIR, f), "utf8").catch(() => null);
       if (!raw) return;
       try {
-        const info = JSON.parse(raw) as { pid: number; sessionId: string; procStart?: string; status?: string; name?: string; cwd?: string };
+        const info = JSON.parse(raw) as { pid: number; sessionId: string; procStart?: string; status?: string; name?: string; cwd?: string; entrypoint?: string };
         if (!Number.isInteger(info.pid) || info.pid <= 1 || typeof info.sessionId !== "string") return;
         const stat = await procStat(info.pid);
         if (!stat?.start || stat.zombie || (info.procStart && info.procStart !== stat.start)) return;
         if (await descendsFromUs(stat.ppid)) return;
-        map.set(info.sessionId, { pid: info.pid, cwd: typeof info.cwd === "string" ? info.cwd : undefined, status: info.status ?? "unknown", name: info.name ?? null, multiplexer: await multiplexer(info.pid) });
+        map.set(info.sessionId, { pid: info.pid, cwd: typeof info.cwd === "string" ? info.cwd : undefined, status: info.status ?? "unknown", name: info.name ?? null, multiplexer: await multiplexer(info.pid), ...(info.entrypoint?.startsWith("sdk") ? { headless: true } : {}) });
       } catch {
         /* a half-written status file; the next poll picks it up */
       }

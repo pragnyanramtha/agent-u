@@ -66,7 +66,8 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
     cwd: spec.cwd,
     env: { ...process.env, ...spec.env, ...profile?.env },
     stdio: [piped ? "pipe" : "ignore", "pipe", "pipe"],
-    detached: false,
+    /* its own process group, so Stop also ends the commands and helpers the agent started */
+    detached: true,
   });
   const run: Run = {
     child,
@@ -88,6 +89,8 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
     if (!text) return;
     onChunk?.(text);
     buf += text;
+    /* a line this long isn't an event anyone can use */
+    if (buf.length > 16 << 20) buf = buf.slice(buf.lastIndexOf("\n") + 1 || buf.length);
     let nl;
     while ((nl = buf.indexOf("\n")) !== -1) {
       const line = buf.slice(0, nl).trim();
@@ -103,7 +106,18 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
     run.deltas.clear();
     emit();
   });
+  /* stdout can still deliver the last lines (a final error or result) after "exit"; "close" waits for them,
+   * but an orphaned helper holding stdout open would keep it from ever firing */
+  let finished = false;
+  let exitTimer: ReturnType<typeof setTimeout> | undefined;
   child.on("exit", (code, signal) => {
+    exitTimer = setTimeout(() => finish(code, signal), 1500);
+  });
+  child.on("close", (code, signal) => finish(code, signal));
+  const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(exitTimer);
     const tail = decoder.end();
     if (tail) onChunk?.(tail);
     buf += tail;
@@ -111,12 +125,12 @@ export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string
     buf = "";
     if (run.state.status !== "running") return;
     run.state =
-      code === 0 || signal === "SIGTERM"
+      code === 0 || signal === "SIGTERM" || signal === "SIGKILL"
         ? { ...run.state, status: "idle" }
         : { ...run.state, status: "error", error: lastLine(run.stderr) || `Exited with code ${code}` };
     run.deltas.clear();
     emit();
-  });
+  };
   emit();
   return run;
 }
@@ -142,9 +156,28 @@ export function rekeyTurn(from: string, to: string) {
   if (fns?.size) for (const d of run.deltas.values()) fns.forEach((fn) => fn({ ...d }));
 }
 
+/** SIGTERM to the turn's whole process group, then SIGKILL whatever ignored it. */
+export function killGroup(child: ChildProcess) {
+  const pid = child.pid;
+  if (!pid) return;
+  const signal = (sig: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, sig);
+    } catch {
+      try {
+        child.kill(sig);
+      } catch {
+        /* gone */
+      }
+    }
+  };
+  signal("SIGTERM");
+  setTimeout(() => signal("SIGKILL"), 5000).unref();
+}
+
 export function stopTurn(key: string) {
   const run = runs.get(key);
-  if (run?.state.status === "running") run.child.kill("SIGTERM");
+  if (run?.state.status === "running") killGroup(run.child);
 }
 
 export function onTurn(key: string, fn: (s: CliRunState) => void) {

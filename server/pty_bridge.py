@@ -22,6 +22,11 @@ pid, fd = pty.fork()
 if pid == 0:
     try:
         os.execvp(cmd[0], cmd)
+    except BaseException as err:  # noqa: BLE001 - say why on the terminal, then exit like a shell would
+        try:
+            os.write(1, f"couldn't run {cmd[0]}: {getattr(err, 'strerror', None) or err}\r\n".encode())
+        except BaseException:  # noqa: BLE001
+            pass
     finally:
         os._exit(127)
 

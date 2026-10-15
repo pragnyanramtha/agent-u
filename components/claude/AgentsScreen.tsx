@@ -237,11 +237,11 @@ const stored = (p: ProfileInfo) => fromDraft(toDraft(p));
 
 function Profiles() {
   const { profiles, configPath } = useProfiles();
-  const [edit, setEdit] = useState<{ draft: Draft; isNew: boolean } | null>(null);
+  const [edit, setEdit] = useState<{ draft: Draft; isNew: boolean; from?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const save = async (next: ReturnType<typeof fromDraft>[]) => {
+  const save = async (next: (ReturnType<typeof fromDraft> & { previousId?: string })[]) => {
     setSaving(true);
     setError(null);
     try {
@@ -261,9 +261,11 @@ function Profiles() {
   const submit = () => {
     if (!edit) return;
     const p = fromDraft(edit.draft);
-    const rest = custom.filter((c) => c.id !== p.id).map(stored);
-    if (edit.isNew && (profiles ?? []).some((x) => x.id === p.id && !x.builtin)) return setError(`There's already a profile called ${p.id}.`);
-    void save([...rest, p]);
+    const renamed = !edit.isNew && edit.from && edit.from !== p.id ? edit.from : null;
+    if ((edit.isNew || renamed) && (profiles ?? []).some((x) => x.id === p.id && (x.custom || x.builtin))) return setError(`There's already a profile called ${p.id}.`);
+    /* a rename replaces the old entry; its masked secrets are looked up under the old id */
+    const rest = custom.filter((c) => c.id !== p.id && c.id !== renamed).map(stored);
+    void save([...rest, renamed ? { ...p, previousId: renamed } : p]);
   };
   const reset = async (p: ProfileInfo) => {
     const ok = await confirmAsk(p.builtin ? { title: `Reset ${p.label}?`, body: "Your changes to this built-in profile are dropped.", confirm: "Reset" } : { title: `Delete ${p.label}?`, body: "Sessions that used it go back to the built-in profile.", confirm: "Delete", danger: true });
@@ -317,7 +319,7 @@ function Profiles() {
                   {p.builtin ? "Reset" : "Delete"}
                 </button>
               )}
-              <button type="button" onClick={() => setEdit({ isNew: false, draft: toDraft(p) })} className="h-8 shrink-0 rounded-full px-3 text-[12.5px] font-medium text-ink shadow-btn hover:bg-hover">
+              <button type="button" onClick={() => setEdit({ isNew: false, draft: toDraft(p), from: p.id })} className="h-8 shrink-0 rounded-full px-3 text-[12.5px] font-medium text-ink shadow-btn hover:bg-hover">
                 Edit
               </button>
             </li>
@@ -337,8 +339,8 @@ function ProfileEditor({
   error,
   profiles,
 }: {
-  edit: { draft: Draft; isNew: boolean };
-  setEdit: (e: { draft: Draft; isNew: boolean } | null) => void;
+  edit: { draft: Draft; isNew: boolean; from?: string };
+  setEdit: (e: { draft: Draft; isNew: boolean; from?: string } | null) => void;
   onSave: () => void;
   saving: boolean;
   error: string | null;

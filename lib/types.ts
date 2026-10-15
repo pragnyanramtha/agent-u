@@ -27,6 +27,8 @@ export type TerminalInfo = {
   status: string;
   multiplexer: string | null;
   name: string | null;
+  /** started by another program through the Agent SDK (no terminal at all) */
+  headless?: boolean;
 };
 
 /** Which coding agent a session belongs to. Plain session ids are Claude; others are "<agent>:<id>". */

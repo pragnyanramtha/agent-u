@@ -1,5 +1,5 @@
 import type { PermissionMode } from "@/lib/types";
-import { liveStream, startTurn, type Run } from "./cli-run";
+import { killGroup, liveStream, startTurn, type Run } from "./cli-run";
 import { errorText } from "./codex-parse";
 
 /* One web-driven Codex turn over `codex app-server` (JSON-RPC 2.0, one JSON
@@ -73,7 +73,7 @@ export function appServerTurn(o: AppTurnOptions): Run {
     done = true;
     run.child.stdin?.end();
     killTimer = setTimeout(() => {
-      if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill("SIGTERM");
+      if (run.child.exitCode === null && run.child.signalCode === null) killGroup(run.child);
     }, 5000);
   }
   const fail = (m: Msg, what: string) => finish(errorText(m.error?.message || `${what} failed`));
