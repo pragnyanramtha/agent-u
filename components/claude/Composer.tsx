@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, Folder, NavArrowDown, Plus, ShieldAlert, ShieldCheck } from "iconoir-react";
+import { ArrowUp, Attachment, Check, Folder, NavArrowDown, Plus, ShieldAlert, ShieldCheck } from "iconoir-react";
 import { APP_COMMANDS, rankCommands, type SlashItem } from "@/lib/commands";
 import { ContextRing, type ContextUsage } from "./ContextRing";
 import { promptAsk } from "./Ask";
@@ -9,6 +9,8 @@ import type { SessionCost } from "@/lib/client/usage";
 import { shortPath } from "@/lib/client/api";
 import { load, save } from "@/lib/client/storage";
 import { AGENT_LABEL, type AgentId, type PermissionMode, type ProfileInfo } from "@/lib/types";
+import { withAttachments } from "@/lib/attachments";
+import { AttachmentChips, useAttachments } from "./Attachments";
 
 /* The composer pill: one calm surface with a "+" menu on the left, the text
  * in the middle, and one quiet agent/model/approvals picker plus send on the
@@ -193,6 +195,16 @@ export function Composer({
   const menuRef = useRef<HTMLDivElement>(null);
   const uid = useId();
   const [catalog, setCatalog] = useState<SlashItem[]>([]);
+  const files = useAttachments();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [fileNote, setFileNote] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const addFiles = (list: FileList | File[]) => setFileNote(files.add(list));
+  useEffect(() => {
+    if (!fileNote) return;
+    const t = setTimeout(() => setFileNote(null), 6000);
+    return () => clearTimeout(t);
+  }, [fileNote]);
 
   /* commands and skills on disk, so the menu works before the session is running */
   useEffect(() => {
@@ -329,20 +341,23 @@ export function Composer({
     setMenu(which);
   };
 
-  const canSend = draft.trim().length > 0 && !sending;
-  const stopFirst = Boolean(running && onStop && !draft.trim() && !sending);
+  const hasFiles = files.items.length > 0;
+  const canSend = (draft.trim().length > 0 || hasFiles) && !sending && !files.uploading && !files.failed;
+  const stopFirst = Boolean(running && onStop && !draft.trim() && !hasFiles && !sending);
   const send = async () => {
     if (!canSend) return;
-    const text = draft.trim();
+    const typed = draft.trim();
+    const text = withAttachments(typed, files.paths);
     const app = /^\/(\w+)(?:\s+([\s\S]*))?$/.exec(text);
-    if (app && onAppCommand && APP_COMMANDS.some((c) => c.name === app[1]) && onAppCommand(app[1], (app[2] ?? "").trim())) {
+    if (app && !hasFiles && onAppCommand && APP_COMMANDS.some((c) => c.name === app[1]) && onAppCommand(app[1], (app[2] ?? "").trim())) {
       setDraft("");
       return;
     }
     setSending(true);
     setDraft("");
     const ok = await onSend(text).catch(() => false);
-    if (!ok) setDraft(text);
+    if (!ok) setDraft(typed);
+    else files.clear();
     setSending(false);
   };
 
@@ -500,6 +515,18 @@ export function Composer({
               type="button"
               role="menuitem"
               onClick={() => {
+                setMenu(null);
+                fileRef.current?.click();
+              }}
+              className={menuRow}
+            >
+              <Attachment width={16} height={16} strokeWidth={1.8} className="shrink-0 text-ink-2" aria-hidden />
+              <span>Files or photos</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
                 setSlashHidden(false);
                 if (!draft.trim()) {
                   setMenu(null);
@@ -631,11 +658,45 @@ export function Composer({
         </MenuShell>
       )}
 
-      <div className="composer-pill composer-grid relative px-2.5 py-2.5" data-stacked={stacked || undefined} data-invalid={folderInvalid || undefined}>
-        {(notice || (suggestion && !draft)) && (
+      <div
+        className={`composer-pill composer-grid relative px-2.5 py-2.5 ${dragging ? "ring-2 ring-accent/50" : ""}`}
+        data-stacked={stacked || undefined}
+        data-invalid={folderInvalid || undefined}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+        }}
+        onDrop={(e) => {
+          setDragging(false);
+          if (!e.dataTransfer.files.length) return;
+          e.preventDefault();
+          addFiles(e.dataTransfer.files);
+        }}
+      >
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            if (e.target.files) addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        {(notice || (suggestion && !draft) || hasFiles || fileNote) && (
           <div className="flex min-w-0 flex-col gap-1 px-1 pb-1 [grid-area:header]">
             {notice}
-            {suggestion && !draft && (
+            <AttachmentChips items={files.items} onRemove={files.remove} onRetry={(id) => void files.retry(id)} />
+            {fileNote && (
+              <p role="status" className="text-[12px] text-ink-3">
+                {fileNote}
+              </p>
+            )}
+            {suggestion && !draft && !hasFiles && (
               <button
                 type="button"
                 onClick={() => {
@@ -659,7 +720,7 @@ export function Composer({
             aria-haspopup="menu"
             aria-expanded={openMenu === "plus"}
             aria-controls={openMenu === "plus" ? `${uid}-plus` : undefined}
-            aria-label="Add folder or command"
+            aria-label="Add files, folder or command"
             title="Add"
             onClick={() => toggleMenu("plus")}
             className={`${ghost} size-9 ${openMenu === "plus" ? "bg-hover text-ink" : ""}`}
@@ -695,6 +756,13 @@ export function Composer({
             setDraft(e.target.value);
             setSlashHidden(false);
             if (menu) setMenu(null);
+          }}
+          onPaste={(e) => {
+            const pasted = [...e.clipboardData.files];
+            if (!pasted.length) return;
+            /* a copied image often comes with its file name as text; keep only the file */
+            e.preventDefault();
+            addFiles(pasted);
           }}
           onKeyDown={(e) => {
             if (slashOpen && commands.length) {
@@ -774,8 +842,8 @@ export function Composer({
           {!stopFirst && (
             <button
               type="button"
-              aria-label={sending ? "Sending…" : "Send (Ctrl+Enter)"}
-              title="Send (Ctrl+Enter)"
+              aria-label={sending ? "Sending…" : files.uploading ? "Uploading…" : "Send (Ctrl+Enter)"}
+              title={files.uploading ? "Waiting for the upload" : files.failed ? "Retry or remove the failed upload first" : "Send (Ctrl+Enter)"}
               disabled={!canSend}
               onClick={() => void send()}
               className="composer-send tap relative flex size-9 shrink-0 items-center justify-center rounded-full bg-ink text-surface transition-[opacity,transform] duration-200 enabled:active:scale-[0.92] disabled:opacity-25"

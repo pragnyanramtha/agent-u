@@ -3,6 +3,8 @@
 import { parseHandoff } from "@/lib/handoff-text";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, MediaImage } from "iconoir-react";
+import { splitAttachments } from "@/lib/attachments";
+import { SentFiles } from "./Attachments";
 import LoadingState from "@/components/primitives/LoadingState";
 import type { Entry, ToolResult } from "@/lib/types";
 import type { SessionView } from "@/lib/client/useSession";
@@ -165,8 +167,9 @@ function UserText({ text }: { text: string }) {
   );
 }
 
-const UserBubble = memo(function UserBubble({ text, images, pending, ts }: { text: string; images?: number; pending?: boolean; ts?: string }) {
+const UserBubble = memo(function UserBubble({ text: full, images, pending, ts }: { text: string; images?: number; pending?: boolean; ts?: string }) {
   const [expanded, setExpanded] = useState(false);
+  const { text, paths } = useMemo(() => splitAttachments(full), [full]);
   const handoff = parseHandoff(text);
   const long = text.length > 700 || text.split("\n").length > 14;
   const clamp = long && !expanded;
@@ -174,6 +177,7 @@ const UserBubble = memo(function UserBubble({ text, images, pending, ts }: { tex
   const actions = !pending && Boolean(text || ts);
   return (
     <div className={`flex flex-col items-end pl-8 sm:pl-20 ${actions ? ACTIONS_PAD : ""}`} style={enter}>
+      <SentFiles paths={paths} />
       <div
         className={`flex max-w-full min-w-0 flex-col gap-1.5 rounded-[14px] bg-field px-3.5 py-2.5 text-[15px] leading-relaxed text-ink shadow-hairline sm:py-2 sm:text-[13.5px] ${pending ? "opacity-60" : ""}`}
         aria-busy={pending || undefined}

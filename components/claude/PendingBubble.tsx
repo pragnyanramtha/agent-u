@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { Check, Clock, WarningTriangle } from "iconoir-react";
 import type { Pending } from "@/lib/client/useSession";
+import { splitAttachments } from "@/lib/attachments";
+import { SentFiles } from "./Attachments";
 
 /* How long a delivered message can go unseen in the transcript before we say so. */
 const SLOW_MS = 90_000;
@@ -42,6 +44,7 @@ export function PendingBubble({
     return () => clearInterval(t);
   }, [pending.state]);
 
+  const { text: body, paths } = splitAttachments(pending.text);
   const slow = pending.state === "sent" && !queued && pending.via !== "queued" && now - pending.at > SLOW_MS;
   const target = pending.via === "terminal" ? where ?? "the terminal" : agentName;
   const status =
@@ -59,13 +62,14 @@ export function PendingBubble({
 
   return (
     <div className="flex flex-col items-end gap-1 pl-8 sm:pl-20" style={{ animation: "fade-up 260ms cubic-bezier(0.23,1,0.32,1) both" }}>
+      <SentFiles paths={paths} />
       <div
         className={`max-w-full min-w-0 rounded-[14px] border border-dashed px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink [overflow-wrap:anywhere] sm:py-2 sm:text-[13.5px] ${
           pending.state === "failed" ? "border-red/40 bg-red-tint" : "border-line-strong bg-field/60"
         }`}
         aria-busy={pending.state === "sending" || undefined}
       >
-        {pending.text}
+        {body}
       </div>
       <div role="status" className={`flex max-w-full items-center gap-1.5 text-[11.5px] ${status.tone}`}>
         <span className="shrink-0">{status.icon}</span>

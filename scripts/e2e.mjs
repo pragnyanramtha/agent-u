@@ -237,6 +237,22 @@ if (id) {
     }, 180_000);
   });
 
+  await check("an attached file reaches the agent by path", async () => {
+    const a = await post("/api/attachments", {});
+    assert(a.status === 200 && a.body?.dir, `attachments: ${a.status}`);
+    const word = `ATT${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const bytes = new TextEncoder().encode(`The secret word is ${word}.\n`);
+    const q = new URLSearchParams({ dir: a.body.dir, name: "note.txt", offset: "0", total: String(bytes.length), key: "e2e" });
+    const up = await fetch(`${APP}/api/files/upload?${q}`, { method: "POST", headers: { ...headers, "Content-Type": "application/octet-stream" }, body: bytes });
+    assert(up.ok, `upload: ${up.status}`);
+    const r = await send(`Read the attached file and reply with only the secret word in it.\n\nAttached files:\n- ${a.body.dir}/note.txt`, cid("attach"));
+    assert(r.status === 200, `got ${r.status} ${JSON.stringify(r.body)}`);
+    await until(word, async () => {
+      const x = await session(id);
+      return x?.run?.status !== "running" && assistantText(x).includes(word);
+    }, 180_000);
+  });
+
   await check("history pages back without losing or repeating entries", async () => {
     const s = await session(id);
     const all = s.entries.map((e) => e.id);
