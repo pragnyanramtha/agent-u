@@ -7,6 +7,7 @@ import { ContextRing, type ContextUsage } from "./ContextRing";
 import { promptAsk } from "./Ask";
 import type { SessionCost } from "@/lib/client/usage";
 import { shortPath } from "@/lib/client/api";
+import { load, save } from "@/lib/client/storage";
 import { AGENT_LABEL, type AgentId, type PermissionMode, type ProfileInfo } from "@/lib/types";
 
 /* The composer pill: one calm surface with a "+" menu on the left, the text
@@ -207,11 +208,10 @@ export function Composer({
 
   /* drafts survive reloads and switching sessions */
   useEffect(() => {
-    setDraft(sessionStorage.getItem(`draft:${draftKey}`) ?? "");
+    setDraft(load(`draft:${draftKey}`) ?? "");
   }, [draftKey]);
   useEffect(() => {
-    if (draft) sessionStorage.setItem(`draft:${draftKey}`, draft);
-    else sessionStorage.removeItem(`draft:${draftKey}`);
+    save(`draft:${draftKey}`, draft || null);
   }, [draft, draftKey]);
 
   useEffect(() => {

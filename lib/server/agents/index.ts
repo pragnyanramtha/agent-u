@@ -20,7 +20,8 @@ export async function allAdapters(): Promise<AgentAdapter[]> {
   return Promise.all(Object.values(adapters).map((load) => load!()));
 }
 
-const SAFE = /^[A-Za-z0-9._-]{1,128}$/;
+/* never starts with "-" or ".": ids end up as CLI arguments (`codex resume <id>`) */
+const SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const AGENTS: AgentId[] = AGENT_IDS;
 
 /** "codex:abc" -> { agent: "codex", native: "abc" }; a bare id is Claude (backwards compatible). */

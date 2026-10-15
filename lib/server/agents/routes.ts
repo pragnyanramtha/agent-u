@@ -44,6 +44,8 @@ async function stopRunning(a: { runState(n: string): { status: string; startedAt
   const s = a.runState(native);
   if (s?.status !== "running") return;
   stoppedTurns.add(`${key}@${s.startedAt}`);
+  /* turns nobody checks (started without a client id) would otherwise stay here */
+  if (stoppedTurns.size > 200) stoppedTurns.delete(stoppedTurns.values().next().value!);
   await a.stop(native);
 }
 

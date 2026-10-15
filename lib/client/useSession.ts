@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { AgentId, Entry, PermissionMode, RunState, ServerEvent, StreamDelta, TerminalInfo, ToolResult } from "@/lib/types";
 import { api, ApiError } from "./api";
+import { carryOver, load, save } from "./storage";
 
 type Stream = { msgId: string; index: number; kind: StreamDelta["kind"]; text: string };
 /** A message the user sent that isn't in the transcript yet. Kept in sessionStorage so it survives remounts. */
@@ -278,6 +279,8 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
   const [view, dispatch] = useReducer(reducer, undefined, initial);
   const redirectRef = useRef(onRedirect);
   redirectRef.current = onRedirect;
+  const pendingNow = useRef(view.pending);
+  pendingNow.current = view.pending;
 
   useEffect(() => {
     if (!id) return;
@@ -350,9 +353,7 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
               attempt = 0;
               const event = JSON.parse(data) as ServerEvent;
               if (event.type === "redirect") {
-                /* carry unsent bubbles over to the new id */
-                const saved = sessionStorage.getItem(pendingKey(id));
-                if (saved) sessionStorage.setItem(pendingKey(event.sessionId), saved);
+                carryOver(id, event.sessionId, pendingNow.current);
                 redirectRef.current(event.sessionId);
               }
               else if (event.type !== "ping") dispatch({ type: "event", event });
@@ -392,7 +393,7 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
     if (!id || restored.current || view.status === "connecting") return;
     restored.current = true;
     try {
-      const saved = JSON.parse(sessionStorage.getItem(pendingKey(id)) ?? "[]") as Pending[];
+      const saved = JSON.parse(load(pendingKey(id)) ?? "[]") as Pending[];
       if (saved.length) dispatch({ type: "restorePending", pending: saved.map((p) => (p.state === "sending" ? { ...p, state: "failed", error: "The page reloaded before this was confirmed. Retry is safe: it won't send twice." } : p)) });
     } catch {
       /* corrupt entry: ignore */
@@ -400,8 +401,7 @@ export function useSession(id: string | null, onRedirect: (id: string) => void) 
   }, [id, view.status]);
   useEffect(() => {
     if (!id || !restored.current) return;
-    if (view.pending.length) sessionStorage.setItem(pendingKey(id), JSON.stringify(view.pending));
-    else sessionStorage.removeItem(pendingKey(id));
+    save(pendingKey(id), view.pending.length ? JSON.stringify(view.pending) : null);
   }, [id, view.pending]);
 
   const addPending = useCallback((text: string) => {

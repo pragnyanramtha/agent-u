@@ -22,6 +22,7 @@ export type { Source };
  * The source session is left as it was. */
 
 const MAX_ENTRIES = 4000;
+const TAIL_BYTES = 24 * 1024 * 1024;
 
 /** The whole conversation of a session, oldest first (capped). */
 export async function loadSource(raw: string): Promise<Source | null> {
@@ -34,7 +35,8 @@ export async function loadSource(raw: string): Promise<Source | null> {
   if (key.agent === "claude") {
     const ctx = await sessionContext(key.native);
     if (!ctx) return null;
-    const { lines } = await readLines(ctx.file, 0, ctx.size);
+    /* only the newest entries are carried over; a session of hundreds of MB isn't read whole */
+    const { lines } = await readLines(ctx.file, Math.max(0, ctx.size - TAIL_BYTES), ctx.size);
     entries = parseLines(lines);
     title = metaTitle(ctx.meta) ?? "";
     cwd = ctx.cwd;

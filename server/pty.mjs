@@ -15,6 +15,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,14 +24,19 @@ import { WebSocketServer } from "ws";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 
-/* same .env.local the Next app reads */
+/* the env files the Next app reads, parsed the same way ($VAR expansion, comments), so UI_SECRET matches */
 try {
-  for (const line of fs.readFileSync(path.join(root, ".env.local"), "utf8").split("\n")) {
-    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
+  const nextPkg = createRequire(import.meta.url).resolve("next/package.json");
+  createRequire(nextPkg)("@next/env").loadEnvConfig(root, process.env.NODE_ENV !== "production", { info() {}, error() {} });
 } catch {
-  /* env from the service unit only */
+  try {
+    for (const line of fs.readFileSync(path.join(root, ".env.local"), "utf8").split("\n")) {
+      const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);
+      if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
+  } catch {
+    /* env from the service unit only */
+  }
 }
 
 const PORT = Number(process.env.PTY_PORT ?? 3312);
@@ -285,7 +291,7 @@ function createTerm({ cmd, cwd, env = {}, cols, rows, label, kind, profile = nul
     t.size += chunk.length;
     t.seq += chunk.length;
     while (t.size > BUFFER_BYTES && t.chunks.length > 1) t.size -= t.chunks.shift().length;
-    for (const ws of t.clients) if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
+    for (const ws of t.clients) sendBytes(ws, chunk);
   });
   const finish = (code) => {
     if (t.exited) return;
@@ -346,6 +352,15 @@ let sockets = 0;
 
 const clamp = (n, lo, hi, d) => (Number.isFinite(n) && n > 0 ? Math.min(hi, Math.max(lo, n | 0)) : d);
 const sendJson = (ws, msg) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
+
+/* A socket this far behind (a phone on a weak link under a flood of output) is dropped instead of buffering without
+ * bound; the client reconnects at once and catches up from the replay buffer (an attach redraws its screen). */
+const BEHIND_BYTES = 4 * 1024 * 1024;
+function sendBytes(ws, chunk) {
+  if (ws.readyState !== ws.OPEN) return;
+  if (ws.bufferedAmount > BEHIND_BYTES) return ws.close(4090, "Fell behind; reconnecting.");
+  ws.send(chunk, { binary: true });
+}
 
 /** text frames are JSON control/input; binary frames are raw input */
 function onClientMessage(ws, raw, isBinary, write, onResize) {
@@ -426,7 +441,7 @@ function attachOnce(ws, cmd, cols, rows, hello) {
   child.stdin.on("error", () => undefined);
   ctl.on("error", () => undefined);
   sendJson(ws, { type: "hello", ...hello, persistent: false });
-  child.stdout.on("data", (chunk) => ws.readyState === ws.OPEN && ws.send(chunk, { binary: true }));
+  child.stdout.on("data", (chunk) => sendBytes(ws, chunk));
   child.on("exit", (code) => {
     sendJson(ws, { type: "exit", code: code ?? 0 });
     if (ws.readyState === ws.OPEN) ws.close(1000, "exited");

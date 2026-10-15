@@ -282,10 +282,13 @@ function args(text: string, o: { model?: string; mode: PermissionMode; resume?: 
     ...(o.model ? ["--model", o.model] : []),
     ...modeArgs(o.mode),
     ...(o.resume ? ["--resume", o.resume] : []),
-    "--",
-    text,
+    ...(viaStdin(text) ? [] : ["--", text]),
   ];
 }
+
+/** long prompts go on stdin: one argument is capped at 128 KiB */
+const viaStdin = (text: string) => Buffer.byteLength(text) > 64 * 1024;
+const stdinFor = (text: string) => (viaStdin(text) ? { stdin: text } : {});
 
 const md5 = (p: string) => createHash("md5").update(path.resolve(p)).digest("hex");
 const real = (p: string) => {
@@ -362,8 +365,9 @@ async function start(opts: { cwd: string; text: string; model?: string; mode: Pe
     let settled = false;
     let run: ReturnType<typeof startTurn>;
     let live: (line: string) => void = () => {};
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      run = startTurn(tmp, { cmd: bin, args: args(opts.text, opts), cwd: opts.cwd, env: { NO_OPEN_BROWSER: "1" } }, (line) => {
+      run = startTurn(tmp, { cmd: bin, args: args(opts.text, opts), cwd: opts.cwd, env: { NO_OPEN_BROWSER: "1" }, ...stdinFor(opts.text) }, (line) => {
         live(line);
         cap.line(line);
         if (settled || !line.startsWith("{")) return;
@@ -371,6 +375,7 @@ async function start(opts: { cwd: string; text: string; model?: string; mode: Pe
           const ev = JSON.parse(line) as { type?: string; subtype?: string; session_id?: string };
           if (ev.type === "system" && ev.subtype === "init" && typeof ev.session_id === "string") {
             settled = true;
+            clearTimeout(deadline);
             startedCwds.set(ev.session_id, opts.cwd);
             rekeyTurn(tmp, KEY(ev.session_id));
             cap.setId(ev.session_id);
@@ -385,7 +390,15 @@ async function start(opts: { cwd: string; text: string; model?: string; mode: Pe
       return;
     }
     live = liveParser(liveStream(run).push);
+    /* the route gives up at 90s; a start nobody waits for anymore must not go on editing files */
+    deadline = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      stopTurn(tmp);
+      reject(new Error("Cursor didn't start a chat within 85 seconds."));
+    }, 85_000);
     run.child.on("exit", (code) => {
+      clearTimeout(deadline);
       if (settled) return;
       settled = true;
       reject(new Error(friendlyError(turnState(tmp)?.error ?? run.stderr) || `cursor-agent exited with code ${code} before starting a chat.`));
@@ -414,7 +427,7 @@ async function send(id: string, text: string, opts: { model?: string; mode: Perm
   const cap = capturer(id);
   /* failures (e.g. "Authentication required. Please run 'agent login' first") land in runState().error via cli-run */
   let live: (line: string) => void = () => {};
-  const run = startTurn(KEY(id), { cmd: bin, args: args(text, { ...opts, resume: id }), cwd, env: { NO_OPEN_BROWSER: "1" } }, (line) => {
+  const run = startTurn(KEY(id), { cmd: bin, args: args(text, { ...opts, resume: id }), cwd, env: { NO_OPEN_BROWSER: "1" }, ...stdinFor(text) }, (line) => {
     live(line);
     cap.line(line);
   });

@@ -63,26 +63,43 @@ export type GuardedTurn = { key: string; text: string; mode: PermissionMode; mod
 
 const short = (s: string) => (s.length > 140 ? `${s.slice(0, 140)}…` : s);
 
+/* one watcher per session: a message sent while a turn runs replaces the earlier watcher, so a limit fails over once
+ * (earlier messages are in the transcript the fallback continues from) */
+const guards: Map<string, () => void> = ((globalThis as { __agentuGuards?: Map<string, () => void> }).__agentuGuards ??= new Map());
+
 /** Watches the turn just sent; if it fails on a limit and the profile has fallbacks, it carries on under the next one. */
 export function guardTurn(t: GuardedTurn) {
+  guards.get(t.key)?.();
+  guards.delete(t.key);
   if (!t.profile.fallback?.length) return;
   const k = parseSessionKey(t.key);
   if (!k) return;
   const started = Date.now();
+  const watch = (off: () => void) => {
+    const stop = () => {
+      off();
+      if (guards.get(t.key) === stop) guards.delete(t.key);
+    };
+    guards.set(t.key, stop);
+    return stop;
+  };
   if (k.agent === "claude") {
     const run = getRun(k.native);
     if (!run) return;
-    const off = run.observe((e: RunEvent) => {
-      if (e.type !== "run" || e.run.status === "running" || e.run.status === "starting") return;
-      off();
-      if (e.run.error && LIMIT_ERROR.test(e.run.error)) void failover(t, e.run.error);
-    });
+    const stop = watch(
+      run.observe((e: RunEvent) => {
+        if (e.type !== "run" || e.run.status === "running" || e.run.status === "starting") return;
+        stop();
+        if (e.run.error && LIMIT_ERROR.test(e.run.error)) void failover(t, e.run.error);
+      }),
+    );
     return;
   }
   const key = sessionKey(k.agent, k.native);
-  const off = onTurn(key, (s) => {
-    if (s.status === "running") return;
-    off();
+  const stop = watch(
+    onTurn(key, (s) => {
+      if (s.status === "running") return;
+      stop();
     void (async () => {
       let error = s.error && LIMIT_ERROR.test(s.error) ? s.error : null;
       if (!error) {
@@ -94,7 +111,8 @@ export function guardTurn(t: GuardedTurn) {
       }
       if (error) await failover(t, error);
     })().catch((err) => postNotice(t.key, `Couldn't continue on a fallback profile: ${err instanceof Error ? err.message : err}`, "warn"));
-  });
+    }),
+  );
 }
 
 async function failover(t: GuardedTurn, error: string) {

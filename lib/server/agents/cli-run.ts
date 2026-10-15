@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { StreamDelta } from "@/lib/types";
 import { activeProfile } from "../profiles";
@@ -38,6 +39,8 @@ const deltaListeners: Map<string, Set<(d: StreamDelta) => void>> = (() => {
 
 /** streams kept per turn for late subscribers; the oldest go first */
 const MAX_STREAMS = 200;
+export const MAX_ARG = 120 * 1024;
+const MAX_ARGS = 1536 * 1024;
 
 export type SpawnSpec = {
   cmd: string;
@@ -59,6 +62,11 @@ export type SpawnSpec = {
 export function startTurn(key: string, spec: SpawnSpec, onStdout?: (line: string) => void, onChunk?: (text: string) => void): Run {
   const existing = runs.get(key);
   if (existing?.state.status === "running") throw new Error("A turn is already running for this session.");
+  /* Linux caps one argument at 128 KiB (and all of them at a few MB); spawn would fail with a bare E2BIG */
+  const big = Math.max(0, ...spec.args.map((a) => Buffer.byteLength(a)));
+  if (big > MAX_ARG || spec.args.reduce((n, a) => n + Buffer.byteLength(a), 0) > MAX_ARGS) {
+    throw new Error(`This message is too long to hand to ${path.basename(spec.cmd)} (${Math.round(big / 1024)} KB). Shorten it, or put the long part in a file and point the agent at it.`);
+  }
   const piped = spec.keepStdin || spec.stdin !== undefined;
   /* a profile (another backend, an API key, a proxy) adds its global flags and environment */
   const profile = activeProfile();
@@ -195,7 +203,13 @@ export function onTurn(key: string, fn: (s: CliRunState) => void) {
   }
   run.listeners.add(fn);
   const r = run;
-  return () => r.listeners.delete(fn);
+  return () => {
+    r.listeners.delete(fn);
+    /* a rekey moved this listener onto the run that took the key */
+    runs.get(r.key)?.listeners.delete(fn);
+    /* a placeholder for a session someone only looked at goes once nobody listens */
+    if (!r.child && !r.listeners.size && runs.get(r.key) === r) runs.delete(r.key);
+  };
 }
 
 /* ---------- live deltas ---------- */

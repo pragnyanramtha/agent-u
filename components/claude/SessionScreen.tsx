@@ -6,6 +6,7 @@ import { AGENT_LABEL, type AgentId, type PermissionMode, type ServerTerminal } f
 import { AGENT_TONE, AgentMark } from "./SessionList";
 import { OPEN_TERMINAL_EVENT } from "./CommandPalette";
 import { api, ApiError, shortPath } from "@/lib/client/api";
+import { carryOver } from "@/lib/client/storage";
 import { serverId, useSession } from "@/lib/client/useSession";
 import { postReliably } from "@/lib/client/send";
 import { openServerTerminal } from "@/lib/client/terminals";
@@ -138,10 +139,13 @@ export function SessionScreen({
     document.title = view.title ? `${view.title} · agent-u` : "agent-u";
   }, [view.title]);
 
-  /* the bubble stays until the message shows up in the transcript; failures stay visible with Retry */
+  const pendingRef = useRef(view.pending);
+  pendingRef.current = view.pending;
+  /* the bubble stays until the message shows up in the transcript; failures stay visible with Retry.
+   * A retry reuses the id the server last saw, so it can't send twice, unless that id was spent on a send that never ran (`fresh`) */
   const deliver = useCallback(
-    async (localId: string, text: string, fresh = false) => {
-      const clientId = fresh ? `${localId}-${Date.now().toString(36)}` : localId;
+    async (localId: string, text: string, fresh = false, sentAs?: string) => {
+      const clientId = fresh ? `${localId}-${Date.now().toString(36)}` : (sentAs ?? localId);
       updatePending(localId, { state: "sending", error: undefined, resend: undefined, at: Date.now(), sentAs: clientId });
       try {
         const res = await postReliably<{ id: string; via?: "terminal" | "web" | "queued"; cleared?: string | null }>(
@@ -153,9 +157,7 @@ export function SessionScreen({
         /* a greyed suggestion or half-typed text was in the terminal's prompt; say what was cleared */
         if (res.cleared && !/^Try "/.test(res.cleared)) setError(`Cleared "${res.cleared.slice(0, 80)}" from the terminal's prompt before sending.`);
         if (res.id !== id) {
-          /* carry unsent bubbles over to the new id */
-          const saved = sessionStorage.getItem(`pending:${id}`);
-          if (saved) sessionStorage.setItem(`pending:${res.id}`, saved);
+          carryOver(id, res.id, pendingRef.current.map((p) => (p.localId === localId ? { ...p, state: "sent", via: res.via, at: Date.now(), sentAs: clientId, error: undefined, resend: undefined } : p)));
           onNavigate(res.id);
         }
       } catch (err) {
@@ -167,10 +169,8 @@ export function SessionScreen({
     [id, localModel, localMode, localProfile, updatePending, onNavigate],
   );
   /* sends that failed for want of a connection go out again once it's back */
-  const pendingRef = useRef(view.pending);
-  pendingRef.current = view.pending;
   useEffect(() => {
-    const retry = () => pendingRef.current.filter((p) => p.state === "failed" && p.error === OFFLINE).forEach((p) => void deliver(p.localId, p.text));
+    const retry = () => pendingRef.current.filter((p) => p.state === "failed" && p.error === OFFLINE).forEach((p) => void deliver(p.localId, p.text, false, p.sentAs));
     window.addEventListener("online", retry);
     return () => window.removeEventListener("online", retry);
   }, [deliver]);
@@ -502,7 +502,7 @@ export function SessionScreen({
             agentName={agentName}
             claudeBusy={Boolean(busy)}
             queued={p.via === "queued" && view.queue.includes(serverId(p))}
-            onRetry={() => void deliver(p.localId, p.text, p.resend)}
+            onRetry={() => void deliver(p.localId, p.text, p.resend || p.state === "sent", p.sentAs)}
             onDiscard={() => dropPending(p.localId)}
             onUnqueue={() => {
               dropPending(p.localId);

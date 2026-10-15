@@ -83,14 +83,26 @@ export function readPrompt(ansiScreen: string): PromptState {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/* tmux refuses a send-keys over about 16 KB ("command too long"), so long text goes in pieces of at most 8 KB */
+const CHUNK = 2000;
+
+/** One line of plain text: newlines would submit, tabs autocomplete and escapes interrupt, so none get through. */
+export const typeable = (text: string) =>
+  text
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\t/g, "  ")
+    .replace(/[\u0000-\u001f\u007f]/g, "");
+
 async function keys(target: InputTarget, line: string) {
-  if (target.kind === "zellij") {
-    if (line) await run("zellij", ["--session", target.session, "action", "write-chars", "-p", target.pane, line]);
-    await run("zellij", ["--session", target.session, "action", "write", "-p", target.pane, "13"]);
-  } else {
-    if (line) await run("tmux", ["send-keys", "-t", target.pane, "-l", "--", line]);
-    await run("tmux", ["send-keys", "-t", target.pane, "Enter"]);
+  /* by code point, so an emoji is never split across two pieces */
+  const chars = Array.from(line);
+  const parts = Array.from({ length: Math.ceil(chars.length / CHUNK) }, (_, i) => chars.slice(i * CHUNK, (i + 1) * CHUNK).join(""));
+  for (const part of parts) {
+    if (target.kind === "zellij") await run("zellij", ["--session", target.session, "action", "write-chars", "-p", target.pane, "--", part]);
+    else await run("tmux", ["send-keys", "-t", target.pane, "-l", "--", part]);
   }
+  if (target.kind === "zellij") await run("zellij", ["--session", target.session, "action", "write", "-p", target.pane, "13"]);
+  else await run("tmux", ["send-keys", "-t", target.pane, "Enter"]);
 }
 
 async function clearLine(target: InputTarget) {
@@ -129,7 +141,7 @@ export function typeIntoTerminal(target: InputTarget, text: string, opts: { chec
 
 async function typeLocked(target: InputTarget, text: string, { checkPrompt = true } = {}) {
   if (!checkPrompt) {
-    await keys(target, text.replace(/[\r\n]+/g, " "));
+    await keys(target, typeable(text));
     return { queued: false, cleared: null as string | null };
   }
   let before = readPrompt(await paneScreen(target, true));
@@ -155,7 +167,13 @@ async function typeLocked(target: InputTarget, text: string, { checkPrompt = tru
     if (before.code === "has_text") throw new InputRefused(`Couldn't clear the terminal's prompt ("${before.text.slice(0, 60)}"). Check the terminal view.`, before.code);
     throw new InputRefused("The terminal isn't showing Claude's prompt right now (a dialog or menu may be open). Check the terminal view.", before.code);
   }
-  await keys(target, text.replace(/[\r\n]+/g, " "));
+  try {
+    await keys(target, typeable(text));
+  } catch (err) {
+    /* the prompt was already emptied: say what was in it, or it's lost without a word */
+    if (cleared && err instanceof Error) err.message = `${err.message}. The terminal's prompt held "${cleared.slice(0, 80)}", which was cleared.`;
+    throw err;
+  }
   /* a busy Claude keeps a submitted message in its prompt area as queued, so text still showing isn't a failure;
    * the keys are sent by now, so a failing check must not turn into an error (a retry would type it twice) */
   for (let i = 0; i < 4; i++) {

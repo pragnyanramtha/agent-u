@@ -17,7 +17,8 @@ export function installShutdown() {
     if (stopping) return;
     stopping = true;
     const until = Date.now() + GRACE_MS;
-    const busy = () => activeRuns().filter((r) => r.state.status === "running" || r.state.status === "starting").length + runningTurns().length;
+    /* a turn waiting for an approval won't finish on its own; the session resumes with the next message */
+    const busy = () => activeRuns().filter((r) => (r.state.status === "running" || r.state.status === "starting") && r.state.pending.length === 0).length + runningTurns().length;
     if (busy()) console.log(`shutdown: waiting up to ${GRACE_MS / 1000}s for ${busy()} running turn(s)`);
     while (busy() && Date.now() < until) await sleep(500);
     for (const r of activeRuns()) r.close();

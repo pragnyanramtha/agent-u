@@ -116,6 +116,11 @@ describe("cli turns", () => {
     expect(after).toEqual([]);
   });
 
+  it("refuse an argument too long for the kernel with a readable error, before spawning", () => {
+    expect(() => startTurn("t:e2big", sh(`echo ${"x".repeat(200 * 1024)}`))).toThrow(/too long to hand to sh/);
+    expect(turnState("t:e2big")).toBeNull();
+  });
+
   it("survive a huge single stdout line without running away", async () => {
     let longest = 0;
     const done = ended("t:big");

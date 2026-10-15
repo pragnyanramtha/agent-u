@@ -86,9 +86,10 @@ export function PendingBubble({
         )}
         {(pending.state === "failed" || slow) && (
           <span className="ml-1 flex shrink-0 items-center gap-1">
-            {pending.state === "failed" && (
+            {/* a long-unseen message with nothing running was most likely lost (e.g. the server restarted) */}
+            {(pending.state === "failed" || !claudeBusy) && (
               <button type="button" onClick={onRetry} className="tap relative rounded-full px-2 py-0.5 font-medium text-ink hover:bg-hover">
-                Retry
+                {pending.state === "failed" ? "Retry" : "Send again"}
               </button>
             )}
             <button type="button" onClick={onDiscard} className="tap relative rounded-full px-2 py-0.5 font-medium text-ink-2 hover:bg-hover">

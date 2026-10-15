@@ -245,8 +245,19 @@ function argsFor(text: string, mode: PermissionMode, model: string | undefined, 
   const args = ["--permission-mode", CLI_MODE[mode] ?? "auto", "--respect-workspace-trust", "false"];
   if (model) args.push("--model", model);
   if (resume) args.push("--resume", resume);
-  args.push("-p", "--", text);
+  /* one argument is capped at 128 KiB; long prompts go in a private file (Devin reads it at start; removed later) */
+  if (Buffer.byteLength(text) > 64 * 1024) args.push("-p", "--prompt-file", promptFile(text));
+  else args.push("-p", "--", text);
   return args;
+}
+
+function promptFile(text: string): string {
+  const dir = path.join(os.tmpdir(), "agent-u-prompts");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `devin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.md`);
+  fs.writeFileSync(file, text, { mode: 0o600 });
+  setTimeout(() => fs.rm(file, { force: true }, () => undefined), 30 * 60_000).unref();
+  return file;
 }
 
 async function start(opts: { cwd: string; text: string; model?: string; mode: PermissionMode }): Promise<{ id: string }> {
