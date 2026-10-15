@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Xmark } from "iconoir-react";
 import "@xterm/xterm/css/xterm.css";
+import { api } from "@/lib/client/api";
 
 /** What to open: a kept terminal (`term`), a tmux session, a CLI's multiplexer (`pid`/`session`), or a new shell (`cwd`). */
 export type TerminalTarget = { term?: string; tmux?: string; session?: string; pid?: number; cwd?: string; label: string };
@@ -101,6 +102,8 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
     let disposed = false;
     let cleanup = () => {};
     setOutput(false);
+    setConn("connecting");
+    setReason(null);
     (async () => {
       const [{ Terminal }, { FitAddon }, { Unicode11Addon }, { WebLinksAddon }] = await Promise.all([
         import("@xterm/xterm"),
@@ -187,7 +190,12 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
         };
         sock.onmessage = (e) => {
           if (typeof e.data === "string") {
-            const msg = JSON.parse(e.data) as { type: string; id?: string; label?: string; kind?: string; persistent?: boolean; code?: number };
+            let msg: { type: string; id?: string; label?: string; kind?: string; persistent?: boolean; code?: number };
+            try {
+              msg = JSON.parse(e.data);
+            } catch {
+              return;
+            }
             if (msg.type === "hello") {
               if (msg.label) setLabel(msg.label);
               setKind(msg.kind ?? null);
@@ -218,6 +226,12 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
           setConn("reconnecting");
           setReason(opened ? "Connection lost. Reconnecting…" : "Can't reach the terminal server. Retrying…");
           tries++;
+          /* a refused upgrade looks like a network error: after a few, ask the app whether we're still signed in (api() sends us to login if not) */
+          if (!opened && tries === 3)
+            void api("/api/terminals").then(
+              () => !disposed && !ended && setReason("The app is up but the terminal server isn't answering. It may be restarting, or agent-u-pty is down. Retrying…"),
+              () => undefined,
+            );
           timer = setTimeout(connect, Math.min(10_000, 400 * 2 ** Math.min(tries, 5)));
         };
       };
@@ -284,7 +298,11 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
         term.dispose();
         termRef.current = null;
       };
-    })();
+    })().catch((err: unknown) => {
+      if (disposed) return;
+      setConn("ended");
+      setReason(`Couldn't start the terminal here: ${err instanceof Error ? err.message : String(err)}`);
+    });
     return () => {
       disposed = true;
       cleanup();
@@ -327,6 +345,8 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
     if (text) termRef.current?.paste(text);
   };
 
+  /* a plain shell (or one that ended before saying what it was) restarts fresh; attaches retry the same target */
+  const isShell = kind === "shell" || (!kind && !target.tmux && !target.pid && !target.session && !target.term);
   const dot = conn === "open" ? "bg-green" : conn === "ended" ? "bg-red" : "animate-pulse bg-orange";
   const tool = "h-7 shrink-0 rounded-[7px] px-2 text-[12px] text-[#c9ccd3] hover:bg-white/10";
   return (
@@ -345,12 +365,12 @@ export function WebTerminal({ target, onClose }: { target: TerminalTarget; onClo
             <button
               type="button"
               onClick={() => {
-                if (kind === "shell" || !kind) setFresh(true);
+                if (isShell) setFresh(true);
                 setAttempt((a) => a + 1);
               }}
               className="ml-1 shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-[12px] font-medium text-[#e6e8ec] hover:bg-white/15"
             >
-              {kind === "shell" || !kind ? "New shell" : "Reattach"}
+              {isShell ? "New shell" : kind ? "Reattach" : "Retry"}
             </button>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-0.5">
